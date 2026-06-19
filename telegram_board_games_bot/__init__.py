@@ -1,0 +1,2 @@
+"""Telegram board games bot."""
+

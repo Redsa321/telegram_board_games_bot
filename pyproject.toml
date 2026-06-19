@@ -1,0 +1,12 @@
+[project]
+name = "telegram-board-games-bot"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.0,<2",
+    "python-telegram-bot>=21,<23",
+    "chess>=1.11,<2",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

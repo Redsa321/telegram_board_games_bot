@@ -1,0 +1,52 @@
+# Secrets and local configuration
+.env
+.env.*
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging and build output
+*.egg-info/
+build/
+dist/
+
+# Tests, coverage, and type-checker caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Local databases and SQLite journals
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# Logs and runtime files
+*.log
+*.pid
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local assistant metadata
+.agents/
+.codex/
