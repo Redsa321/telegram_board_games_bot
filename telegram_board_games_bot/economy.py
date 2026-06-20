@@ -6,7 +6,6 @@ from datetime import UTC, date, datetime
 from math import floor
 from typing import Any
 
-
 MULTIPLIERS = tuple(range(2, 21))
 MULTIPLIER_WEIGHTS = tuple(1 / (multiplier * multiplier) for multiplier in MULTIPLIERS)
 ROBOT_PRIZE_BASES = {
@@ -94,7 +93,7 @@ async def charge_pvp_entry_fee_once(database, db_game, state, game_kind: str):
 
 async def claim_daily_kyzma_bonus(database, chat_id: int, user_id: int, game_kind: str, claim_date: date | None = None) -> DailyClaimResult:
     claim_date = claim_date or datetime.now(UTC).date()
-    game_id = f"daily:{chat_id}:{game_kind}:{claim_date.isoformat()}"
+    game_id = f"daily:{user_id}:{claim_date.isoformat()}"
     claimed = await database.award_kyzma_coins_once(
         game_id=game_id,
         chat_id=chat_id,
@@ -104,8 +103,8 @@ async def claim_daily_kyzma_bonus(database, chat_id: int, user_id: int, game_kin
         multiplier=None,
         reason=DAILY_CLAIM_REASON,
     )
-    stats = await database.ensure_user_stats(chat_id, user_id, game_kind)
-    return DailyClaimResult(claimed, DAILY_CLAIM_KYZMA_COINS, stats.kyzma_coin_balance, claim_date)
+    wallet = await database.ensure_global_wallet(user_id)
+    return DailyClaimResult(claimed, DAILY_CLAIM_KYZMA_COINS, wallet.kyzma_coin_balance, claim_date)
 
 
 def configure_robot_prize(state, difficulty: str, prize_multiplier_factor: int = 1) -> None:
@@ -120,7 +119,7 @@ async def award_finished_game_currency(database, db_game, state, game_kind: str)
     if not db_game.rated and state.robot_user_id is None:
         return False
     winner_user_id = state.winner_user_id()
-    if winner_user_id is None or db_game.chat_id == 0:
+    if winner_user_id is None:
         return False
     if state.robot_user_id is not None and winner_user_id == state.robot_user_id:
         return False

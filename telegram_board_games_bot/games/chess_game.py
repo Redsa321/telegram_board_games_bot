@@ -30,6 +30,14 @@ class ChessState:
     kyzma_prize_base: int | None = None
     kyzma_prize_multiplier: int | None = None
     kyzma_prize: int | None = None
+    global_game: bool = False
+    anonymous_user_ids: list[int] = field(default_factory=list)
+    global_rank: str | None = None
+    move_timeout_seconds: int | None = None
+    turn_started_at: str | None = None
+    timeout_stage: str | None = None
+    timeout_proposer_user_id: int | None = None
+    timeout_accepted_user_ids: list[int] = field(default_factory=list)
 
     @classmethod
     def new(cls, white_user_id: int, black_user_id: int) -> "ChessState":
@@ -58,6 +66,14 @@ class ChessState:
             kyzma_prize_base=value.get("kyzma_prize_base"),
             kyzma_prize_multiplier=value.get("kyzma_prize_multiplier"),
             kyzma_prize=value.get("kyzma_prize"),
+            global_game=bool(value.get("global_game", False)),
+            anonymous_user_ids=[int(user_id) for user_id in value.get("anonymous_user_ids", [])],
+            global_rank=value.get("global_rank"),
+            move_timeout_seconds=value.get("move_timeout_seconds"),
+            turn_started_at=value.get("turn_started_at"),
+            timeout_stage=value.get("timeout_stage"),
+            timeout_proposer_user_id=value.get("timeout_proposer_user_id"),
+            timeout_accepted_user_ids=[int(user_id) for user_id in value.get("timeout_accepted_user_ids", [])],
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -77,6 +93,14 @@ class ChessState:
             "kyzma_prize_base": self.kyzma_prize_base,
             "kyzma_prize_multiplier": self.kyzma_prize_multiplier,
             "kyzma_prize": self.kyzma_prize,
+            "global_game": self.global_game,
+            "anonymous_user_ids": self.anonymous_user_ids,
+            "global_rank": self.global_rank,
+            "move_timeout_seconds": self.move_timeout_seconds,
+            "turn_started_at": self.turn_started_at,
+            "timeout_stage": self.timeout_stage,
+            "timeout_proposer_user_id": self.timeout_proposer_user_id,
+            "timeout_accepted_user_ids": self.timeout_accepted_user_ids,
         }
 
     def board(self) -> chess.Board:

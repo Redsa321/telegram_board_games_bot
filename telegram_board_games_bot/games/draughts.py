@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-
 BOARD_SIZE = 8
+REPETITION_DRAW_COUNT = 3
+NO_PROGRESS_DRAW_PLIES = 80
 
 
 class PieceColor(StrEnum):
@@ -115,6 +116,16 @@ class DraughtsState:
     kyzma_prize_multiplier: int | None = None
     kyzma_prize: int | None = None
     accepted_user_ids: list[int] = field(default_factory=list)
+    global_game: bool = False
+    anonymous_user_ids: list[int] = field(default_factory=list)
+    global_rank: str | None = None
+    move_timeout_seconds: int | None = None
+    turn_started_at: str | None = None
+    timeout_stage: str | None = None
+    timeout_proposer_user_id: int | None = None
+    timeout_accepted_user_ids: list[int] = field(default_factory=list)
+    position_history: list[str] = field(default_factory=list)
+    no_progress_move_count: int = 0
 
     @classmethod
     def new(cls, black_user_id: int, white_user_id: int) -> "DraughtsState":
@@ -128,7 +139,7 @@ class DraughtsState:
                     board[row][col] = Piece(PieceColor.BLACK, PieceKind.MAN)
                 elif row >= 5:
                     board[row][col] = Piece(PieceColor.WHITE, PieceKind.MAN)
-        return cls(
+        state = cls(
             board=board,
             turn=PieceColor.WHITE,
             black_user_id=black_user_id,
@@ -140,10 +151,12 @@ class DraughtsState:
             winner=None,
             result_reason=None,
         )
+        state.position_history = [state.position_key()]
+        return state
 
     @classmethod
     def from_json(cls, value: dict[str, Any]) -> "DraughtsState":
-        return cls(
+        state = cls(
             board=[
                 [Piece.from_json(piece) if piece is not None else None for piece in row]
                 for row in value["board"]
@@ -166,7 +179,20 @@ class DraughtsState:
             kyzma_prize_multiplier=value.get("kyzma_prize_multiplier"),
             kyzma_prize=value.get("kyzma_prize"),
             accepted_user_ids=[int(user_id) for user_id in value.get("accepted_user_ids", [])],
+            global_game=bool(value.get("global_game", False)),
+            anonymous_user_ids=[int(user_id) for user_id in value.get("anonymous_user_ids", [])],
+            global_rank=value.get("global_rank"),
+            move_timeout_seconds=value.get("move_timeout_seconds"),
+            turn_started_at=value.get("turn_started_at"),
+            timeout_stage=value.get("timeout_stage"),
+            timeout_proposer_user_id=value.get("timeout_proposer_user_id"),
+            timeout_accepted_user_ids=[int(user_id) for user_id in value.get("timeout_accepted_user_ids", [])],
+            position_history=[str(position) for position in value.get("position_history", [])],
+            no_progress_move_count=int(value.get("no_progress_move_count", 0)),
         )
+        if not state.position_history:
+            state.position_history = [state.position_key()]
+        return state
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -192,6 +218,16 @@ class DraughtsState:
             "kyzma_prize_multiplier": self.kyzma_prize_multiplier,
             "kyzma_prize": self.kyzma_prize,
             "accepted_user_ids": self.accepted_user_ids,
+            "global_game": self.global_game,
+            "anonymous_user_ids": self.anonymous_user_ids,
+            "global_rank": self.global_rank,
+            "move_timeout_seconds": self.move_timeout_seconds,
+            "turn_started_at": self.turn_started_at,
+            "timeout_stage": self.timeout_stage,
+            "timeout_proposer_user_id": self.timeout_proposer_user_id,
+            "timeout_accepted_user_ids": self.timeout_accepted_user_ids,
+            "position_history": self.position_history,
+            "no_progress_move_count": self.no_progress_move_count,
         }
 
     def legal_moves(self) -> list[DraughtsMove]:
@@ -280,11 +316,11 @@ class DraughtsState:
                     self.last_move = DraughtsMove(original_from, move.sequence[: index + 1])
                     return ApplyMoveResult(captured, promoted, False, False, None)
             else:
-                self.end_turn()
+                self.end_turn(bool(self.captured_this_turn) or promoted)
                 turn_ended = True
 
         if not turn_ended:
-            self.end_turn()
+            self.end_turn(bool(self.captured_this_turn) or promoted)
             turn_ended = True
         self.last_move = move
         return ApplyMoveResult(captured, promoted, turn_ended, self.status is GameStatus.FINISHED, self.winner)
@@ -306,12 +342,21 @@ class DraughtsState:
             return self.white_user_id
         return None
 
-    def end_turn(self) -> None:
+    def end_turn(self, made_progress: bool = False) -> None:
         self.must_continue_from = None
         self.captured_this_turn.clear()
         self.turn = self.turn.opponent
         self.move_number += 1
+        self.no_progress_move_count = 0 if made_progress else self.no_progress_move_count + 1
         self.finish_if_current_player_is_stuck()
+        if self.status is not GameStatus.IN_PROGRESS:
+            return
+        position = self.position_key()
+        self.position_history.append(position)
+        if self.position_history.count(position) >= REPETITION_DRAW_COUNT:
+            self.finish_draw("threefold repetition")
+        elif self.no_progress_move_count >= NO_PROGRESS_DRAW_PLIES:
+            self.finish_draw("80 moves without a capture or promotion")
 
     def finish_if_current_player_is_stuck(self) -> None:
         current_piece_count = sum(
@@ -329,6 +374,28 @@ class DraughtsState:
         self.selected = None
         self.must_continue_from = None
         self.captured_this_turn.clear()
+
+    def finish_draw(self, reason: str) -> None:
+        self.status = GameStatus.FINISHED
+        self.winner = None
+        self.result_reason = reason
+        self.selected = None
+        self.must_continue_from = None
+        self.captured_this_turn.clear()
+
+    def position_key(self) -> str:
+        symbols = {
+            (PieceColor.BLACK, PieceKind.MAN): "b",
+            (PieceColor.BLACK, PieceKind.KING): "B",
+            (PieceColor.WHITE, PieceKind.MAN): "w",
+            (PieceColor.WHITE, PieceKind.KING): "W",
+        }
+        board = "".join(
+            "." if piece is None else symbols[(piece.color, piece.kind)]
+            for row in self.board
+            for piece in row
+        )
+        return f"{self.turn.value}:{board}"
 
     def capture_moves_for_current_player(self) -> list[DraughtsMove]:
         moves: list[DraughtsMove] = []

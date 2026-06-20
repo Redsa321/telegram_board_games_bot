@@ -99,6 +99,53 @@ class LeaderboardEntry(ChatUserStats):
 
 
 @dataclass
+class GlobalUserStats:
+    user_id: int
+    game_kind: str
+    wins: int
+    losses: int
+    draws: int
+    rating: int
+    current_streak: int
+    best_streak: int
+    games_played: int
+    kyzma_coin_balance: int = 0
+
+
+@dataclass
+class GlobalLeaderboardEntry(GlobalUserStats):
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+
+
+@dataclass
+class GlobalWallet:
+    user_id: int
+    kyzma_coin_balance: int
+
+
+@dataclass(frozen=True)
+class MatchmakingEntry:
+    user_id: int
+    chat_id: int
+    message_id: int
+    game_kind: str
+    rated: bool
+    anonymous: bool
+    rating: int
+    joined_at: str
+
+
+@dataclass(frozen=True)
+class GameView:
+    game_id: str
+    user_id: int
+    chat_id: int
+    message_id: int
+
+
+@dataclass
 class InlineInvite:
     inline_message_id: str
     challenger_id: int
@@ -171,6 +218,7 @@ class Database:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA foreign_keys=ON")
 
     @classmethod
@@ -189,6 +237,7 @@ class Database:
         self._add_column_if_missing("chat_user_stats", "starter_kyzma_granted", "INTEGER NOT NULL DEFAULT 0")
         self._grant_starter_kyzma_to_legacy_empty_stats()
         self._maybe_migrate_kyzma_coin_events_table()
+        self._migrate_global_wallets()
         self.conn.executescript(INDEX_SQL)
         self.conn.commit()
 
@@ -250,6 +299,24 @@ class Database:
             """,
         )
 
+    def _migrate_global_wallets(self) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO global_wallets (
+                user_id, kyzma_coin_balance, created_at, updated_at
+            )
+            SELECT
+                u.telegram_user_id,
+                COALESCE(MAX(s.kyzma_coin_balance), ?),
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            FROM users u
+            LEFT JOIN chat_user_stats s ON s.user_id = u.telegram_user_id
+            GROUP BY u.telegram_user_id
+            """,
+            (STARTER_KYZMA_COINS,),
+        )
+
     def _insert_user_stats_ignore(self, chat_id: int, user_id: int, game_kind: str) -> bool:
         cursor = self.conn.execute(
             """
@@ -259,6 +326,28 @@ class Database:
             VALUES (?, ?, ?, ?, 1)
             """,
             (chat_id, user_id, game_kind, STARTER_KYZMA_COINS),
+        )
+        return cursor.rowcount == 1
+
+    def _insert_global_wallet_ignore(self, user_id: int) -> bool:
+        cursor = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO global_wallets (
+                user_id, kyzma_coin_balance, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, STARTER_KYZMA_COINS, now_text(), now_text()),
+        )
+        return cursor.rowcount == 1
+
+    def _insert_global_stats_ignore(self, user_id: int, game_kind: str) -> bool:
+        cursor = self.conn.execute(
+            """
+            INSERT OR IGNORE INTO global_user_stats (user_id, game_kind)
+            VALUES (?, ?)
+            """,
+            (user_id, game_kind),
         )
         return cursor.rowcount == 1
 
@@ -342,7 +431,11 @@ class Database:
             SET status = ?,
                 state_json = ?,
                 current_turn_user_id = ?,
-                message_id = COALESCE(?, message_id),
+                message_id = CASE
+                    WHEN EXISTS (SELECT 1 FROM game_views WHERE game_views.game_id = games.id)
+                        THEN message_id
+                    ELSE COALESCE(?, message_id)
+                END,
                 updated_at = ?
             WHERE id = ?
             """,
@@ -357,9 +450,9 @@ class Database:
         )
         self.conn.commit()
 
-    async def finish_game(self, finish: FinishGame) -> None:
+    async def finish_game(self, finish: FinishGame) -> bool:
         now = now_text()
-        self.conn.execute(
+        cursor = self.conn.execute(
             """
             UPDATE games
             SET status = 'finished',
@@ -367,11 +460,12 @@ class Database:
                 result_reason = ?,
                 updated_at = ?,
                 finished_at = ?
-            WHERE id = ?
+            WHERE id = ? AND finished_at IS NULL
             """,
             (finish.winner_user_id, finish.result_reason, now, now, finish.game_id),
         )
         self.conn.commit()
+        return cursor.rowcount == 1
 
     async def insert_move(self, move: NewMove) -> DbMove:
         now = now_text()
@@ -409,6 +503,33 @@ class Database:
             (chat_id, message_id),
         ).fetchone()
         return row_to_game(row) if row else None
+
+    async def get_game_by_message(self, chat_id: int, message_id: int) -> DbGame | None:
+        row = self.conn.execute(
+            GAME_SELECT
+            + """
+            WHERE (chat_id = ? AND message_id = ?)
+                OR id IN (
+                    SELECT game_id FROM game_views WHERE chat_id = ? AND message_id = ?
+                )
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (chat_id, message_id, chat_id, message_id),
+        ).fetchone()
+        return row_to_game(row) if row else None
+
+    async def get_admin_status_counts(self) -> dict[str, int]:
+        queries = {
+            "users": "SELECT COUNT(*) FROM users WHERE telegram_user_id > 0",
+            "queued": "SELECT COUNT(*) FROM matchmaking_queue",
+            "confirming_games": "SELECT COUNT(*) FROM games WHERE status = 'confirming' AND finished_at IS NULL",
+            "active_games": "SELECT COUNT(*) FROM games WHERE status = 'in_progress' AND finished_at IS NULL",
+            "global_games": "SELECT COUNT(*) FROM games WHERE chat_id = 0 AND finished_at IS NULL AND status != 'finished'",
+        }
+        return {
+            name: int(self.conn.execute(query).fetchone()[0])
+            for name, query in queries.items()
+        }
 
     async def get_active_game_by_inline_message(self, inline_message_id: str) -> DbGame | None:
         row = self.conn.execute(
@@ -516,6 +637,240 @@ class Database:
             raise RuntimeError("stats row was not created")
         return stats
 
+    async def get_global_user_stats(self, user_id: int, game_kind: str) -> GlobalUserStats | None:
+        row = self.conn.execute(
+            """
+            SELECT user_id, game_kind, wins, losses, draws, rating,
+                current_streak, best_streak, games_played
+            FROM global_user_stats
+            WHERE user_id = ? AND game_kind = ?
+            """,
+            (user_id, game_kind),
+        ).fetchone()
+        return GlobalUserStats(**dict(row)) if row else None
+
+    async def ensure_global_user_stats(self, user_id: int, game_kind: str) -> GlobalUserStats:
+        self._insert_global_stats_ignore(user_id, game_kind)
+        self.conn.commit()
+        stats = await self.get_global_user_stats(user_id, game_kind)
+        if stats is None:
+            raise RuntimeError("global stats row was not created")
+        return stats
+
+    async def get_global_leaderboard(self, game_kind: str, limit: int) -> list[GlobalLeaderboardEntry]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                s.user_id, s.game_kind, s.wins, s.losses, s.draws,
+                s.rating, s.current_streak, s.best_streak, s.games_played,
+                u.username, u.first_name, u.last_name
+            FROM global_user_stats s
+            LEFT JOIN users u ON u.telegram_user_id = s.user_id
+            WHERE s.game_kind = ? AND s.games_played > 0
+            ORDER BY s.rating DESC, s.wins DESC, s.games_played ASC, s.user_id ASC
+            LIMIT ?
+            """,
+            (game_kind, limit),
+        ).fetchall()
+        return [GlobalLeaderboardEntry(**dict(row)) for row in rows]
+
+    async def update_global_stats_after_game(self, outcome: GameOutcome) -> None:
+        with self.conn:
+            self._insert_global_stats_ignore(outcome.black_user_id, outcome.game_kind)
+            self._insert_global_stats_ignore(outcome.white_user_id, outcome.game_kind)
+            black_stats = await self.get_global_user_stats(outcome.black_user_id, outcome.game_kind)
+            white_stats = await self.get_global_user_stats(outcome.white_user_id, outcome.game_kind)
+            if black_stats is None or white_stats is None:
+                raise RuntimeError("global stats rows were not created")
+            black_score = 1.0 if outcome.winner_user_id == outcome.black_user_id else 0.0 if outcome.winner_user_id else 0.5
+            white_score = 1.0 - black_score
+            self._apply_global_stats_result(
+                black_stats,
+                elo_rating(black_stats.rating, white_stats.rating, black_score),
+                outcome.winner_user_id,
+            )
+            self._apply_global_stats_result(
+                white_stats,
+                elo_rating(white_stats.rating, black_stats.rating, white_score),
+                outcome.winner_user_id,
+            )
+
+    async def get_global_wallet(self, user_id: int) -> GlobalWallet | None:
+        row = self.conn.execute(
+            """
+            SELECT user_id, kyzma_coin_balance
+            FROM global_wallets
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        return GlobalWallet(**dict(row)) if row else None
+
+    async def ensure_global_wallet(self, user_id: int) -> GlobalWallet:
+        self._insert_global_wallet_ignore(user_id)
+        self.conn.commit()
+        wallet = await self.get_global_wallet(user_id)
+        if wallet is None:
+            raise RuntimeError("global wallet row was not created")
+        return wallet
+
+    async def add_matchmaking_entry(self, entry: MatchmakingEntry) -> None:
+        await self.ensure_global_user_stats(entry.user_id, entry.game_kind)
+        self.conn.execute(
+            """
+            INSERT INTO matchmaking_queue (
+                user_id, chat_id, message_id, game_kind, rated, anonymous, rating, joined_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                message_id = excluded.message_id,
+                game_kind = excluded.game_kind,
+                rated = excluded.rated,
+                anonymous = excluded.anonymous,
+                rating = excluded.rating,
+                joined_at = excluded.joined_at
+            """,
+            (
+                entry.user_id,
+                entry.chat_id,
+                entry.message_id,
+                entry.game_kind,
+                int(entry.rated),
+                int(entry.anonymous),
+                entry.rating,
+                entry.joined_at,
+            ),
+        )
+        self.conn.commit()
+
+    async def remove_matchmaking_entry(self, user_id: int) -> MatchmakingEntry | None:
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT * FROM matchmaking_queue WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            self.conn.execute("DELETE FROM matchmaking_queue WHERE user_id = ?", (user_id,))
+            return row_to_matchmaking_entry(row)
+
+    async def get_matchmaking_entry(self, user_id: int) -> MatchmakingEntry | None:
+        row = self.conn.execute(
+            "SELECT * FROM matchmaking_queue WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return row_to_matchmaking_entry(row) if row else None
+
+    async def list_matchmaking_user_ids(self) -> list[int]:
+        rows = self.conn.execute(
+            "SELECT user_id FROM matchmaking_queue ORDER BY joined_at"
+        ).fetchall()
+        return [int(row["user_id"]) for row in rows]
+
+    async def remove_expired_matchmaking_entries(self, cutoff: str) -> list[MatchmakingEntry]:
+        with self.conn:
+            rows = self.conn.execute(
+                "SELECT * FROM matchmaking_queue WHERE joined_at < ? ORDER BY joined_at",
+                (cutoff,),
+            ).fetchall()
+            if rows:
+                self.conn.execute("DELETE FROM matchmaking_queue WHERE joined_at < ?", (cutoff,))
+            return [row_to_matchmaking_entry(row) for row in rows]
+
+    async def claim_matchmaking_pair(self, user_id: int) -> tuple[MatchmakingEntry, MatchmakingEntry] | None:
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT * FROM matchmaking_queue WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            entry = row_to_matchmaking_entry(row)
+            candidates = [
+                row_to_matchmaking_entry(candidate)
+                for candidate in self.conn.execute(
+                    """
+                    SELECT * FROM matchmaking_queue
+                    WHERE user_id != ? AND game_kind = ? AND rated = ?
+                    ORDER BY joined_at
+                    """,
+                    (entry.user_id, entry.game_kind, int(entry.rated)),
+                ).fetchall()
+            ]
+            if entry.rated:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if abs(entry.rating - candidate.rating)
+                    <= max(matchmaking_rating_window(entry.joined_at), matchmaking_rating_window(candidate.joined_at))
+                ]
+                candidates.sort(key=lambda candidate: (abs(entry.rating - candidate.rating), candidate.joined_at))
+            if not candidates:
+                return None
+            opponent = candidates[0]
+            deleted = self.conn.execute(
+                "DELETE FROM matchmaking_queue WHERE user_id IN (?, ?)",
+                (entry.user_id, opponent.user_id),
+            ).rowcount
+            if deleted != 2:
+                return None
+            return entry, opponent
+
+    async def create_game_view(self, view: GameView) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO game_views (game_id, user_id, chat_id, message_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (view.game_id, view.user_id, view.chat_id, view.message_id),
+        )
+        self.conn.commit()
+
+    async def get_game_views(self, game_id: str) -> list[GameView]:
+        rows = self.conn.execute(
+            "SELECT game_id, user_id, chat_id, message_id FROM game_views WHERE game_id = ?",
+            (game_id,),
+        ).fetchall()
+        return [GameView(**dict(row)) for row in rows]
+
+    async def get_active_global_game_for_user(self, user_id: int) -> DbGame | None:
+        row = self.conn.execute(
+            """
+            SELECT
+                g.id, g.chat_id, g.message_id, g.inline_message_id, g.game_kind,
+                g.status, g.rated, g.state_json, g.current_turn_user_id,
+                g.black_user_id, g.white_user_id, g.winner_user_id,
+                g.result_reason, g.created_at, g.updated_at, g.finished_at
+            FROM games g
+            JOIN game_views v ON v.game_id = g.id
+            WHERE v.user_id = ? AND g.finished_at IS NULL AND g.status != 'finished'
+            ORDER BY g.created_at DESC LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return row_to_game(row) if row else None
+
+    async def get_active_global_games(self) -> list[DbGame]:
+        rows = self.conn.execute(
+            GAME_SELECT
+            + """
+            WHERE chat_id = 0 AND status = 'in_progress' AND finished_at IS NULL
+            ORDER BY updated_at
+            """
+        ).fetchall()
+        return [row_to_game(row) for row in rows]
+
+    async def get_confirming_global_games(self) -> list[DbGame]:
+        rows = self.conn.execute(
+            GAME_SELECT
+            + """
+            WHERE chat_id = 0 AND status = 'confirming' AND finished_at IS NULL
+            ORDER BY created_at
+            """
+        ).fetchall()
+        return [row_to_game(row) for row in rows]
+
     async def get_kyzma_value(self, chat_id: int, user_id: int, game_kind: str) -> int:
         stats = await self.get_user_stats(chat_id, user_id, game_kind)
         rating = stats.rating if stats else 1000
@@ -532,17 +887,17 @@ class Database:
             return {}
         should_commit = not self.conn.in_transaction
         for user_id in distinct_user_ids:
-            self._insert_user_stats_ignore(chat_id, user_id, game_kind)
+            self._insert_global_wallet_ignore(user_id)
         if should_commit:
             self.conn.commit()
         placeholders = ",".join("?" for _ in distinct_user_ids)
         rows = self.conn.execute(
             f"""
             SELECT user_id, kyzma_coin_balance
-            FROM chat_user_stats
-            WHERE chat_id = ? AND game_kind = ? AND user_id IN ({placeholders})
+            FROM global_wallets
+            WHERE user_id IN ({placeholders})
             """,
-            (chat_id, game_kind, *distinct_user_ids),
+            distinct_user_ids,
         ).fetchall()
         balances = {int(row["user_id"]): int(row["kyzma_coin_balance"]) for row in rows}
         return {user_id: balances.get(user_id, 0) for user_id in distinct_user_ids}
@@ -572,7 +927,7 @@ class Database:
         try:
             with self.conn:
                 for user_id in distinct_user_ids:
-                    self._insert_user_stats_ignore(chat_id, user_id, game_kind)
+                    self._insert_global_wallet_ignore(user_id)
                 placeholders = ",".join("?" for _ in distinct_user_ids)
                 existing_rows = self.conn.execute(
                     f"""
@@ -601,12 +956,11 @@ class Database:
                         continue
                     updated = self.conn.execute(
                         """
-                        UPDATE chat_user_stats
-                        SET kyzma_coin_balance = kyzma_coin_balance - ?
-                        WHERE chat_id = ? AND user_id = ? AND game_kind = ?
-                            AND kyzma_coin_balance >= ?
+                        UPDATE global_wallets
+                        SET kyzma_coin_balance = kyzma_coin_balance - ?, updated_at = ?
+                        WHERE user_id = ? AND kyzma_coin_balance >= ?
                         """,
-                        (amount, chat_id, user_id, game_kind, amount),
+                        (amount, now, user_id, amount),
                     )
                     if updated.rowcount != 1:
                         raise _InsufficientKyzmaBalance((user_id,))
@@ -636,7 +990,7 @@ class Database:
         if amount <= 0:
             return False
         with self.conn:
-            self._insert_user_stats_ignore(chat_id, user_id, game_kind)
+            self._insert_global_wallet_ignore(user_id)
             cursor = self.conn.execute(
                 """
                 INSERT OR IGNORE INTO kyzma_coin_events (
@@ -650,11 +1004,11 @@ class Database:
                 return False
             self.conn.execute(
                 """
-                UPDATE chat_user_stats
-                SET kyzma_coin_balance = kyzma_coin_balance + ?
-                WHERE chat_id = ? AND user_id = ? AND game_kind = ?
+                UPDATE global_wallets
+                SET kyzma_coin_balance = kyzma_coin_balance + ?, updated_at = ?
+                WHERE user_id = ?
                 """,
-                (amount, chat_id, user_id, game_kind),
+                (amount, now_text(), user_id),
             )
             return True
 
@@ -673,6 +1027,23 @@ class Database:
             WHERE chat_id = ? AND user_id = ? AND game_kind = ?
             """,
             (int(won), int(lost), int(draw), new_rating, next_streak, next_best_streak, stats.chat_id, stats.user_id, stats.game_kind),
+        )
+
+    def _apply_global_stats_result(self, stats: GlobalUserStats, new_rating: int, winner_user_id: int | None) -> None:
+        won = winner_user_id == stats.user_id
+        lost = winner_user_id is not None and not won
+        draw = winner_user_id is None
+        next_streak = stats.current_streak + 1 if won else 0
+        next_best_streak = max(stats.best_streak, next_streak)
+        self.conn.execute(
+            """
+            UPDATE global_user_stats
+            SET wins = wins + ?, losses = losses + ?, draws = draws + ?,
+                rating = ?, current_streak = ?, best_streak = ?,
+                games_played = games_played + 1
+            WHERE user_id = ? AND game_kind = ?
+            """,
+            (int(won), int(lost), int(draw), new_rating, next_streak, next_best_streak, stats.user_id, stats.game_kind),
         )
 
     async def get_user(self, telegram_user_id: int) -> DbUser:
@@ -718,6 +1089,22 @@ def row_to_move(row: sqlite3.Row) -> DbMove:
     data = dict(row)
     data["state_after"] = json.loads(data.pop("state_after_json"))
     return DbMove(**data)
+
+
+def row_to_matchmaking_entry(row: sqlite3.Row) -> MatchmakingEntry:
+    data = dict(row)
+    data["rated"] = bool(data["rated"])
+    data["anonymous"] = bool(data["anonymous"])
+    return MatchmakingEntry(**data)
+
+
+def matchmaking_rating_window(joined_at: str, now: datetime | None = None) -> int:
+    now = now or datetime.now(UTC)
+    joined = datetime.fromisoformat(joined_at)
+    if joined.tzinfo is None:
+        joined = joined.replace(tzinfo=UTC)
+    elapsed_steps = max(0, int((now - joined).total_seconds()) // 30)
+    return min(500, 100 + elapsed_steps * 50)
 
 
 def elo_rating(rating: int, opponent_rating: int, score: float) -> int:
@@ -811,6 +1198,53 @@ CREATE TABLE IF NOT EXISTS chat_user_stats (
     FOREIGN KEY(user_id) REFERENCES users(telegram_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS global_user_stats (
+    user_id INTEGER NOT NULL,
+    game_kind TEXT NOT NULL,
+    wins INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    draws INTEGER NOT NULL DEFAULT 0,
+    rating INTEGER NOT NULL DEFAULT 1000,
+    current_streak INTEGER NOT NULL DEFAULT 0,
+    best_streak INTEGER NOT NULL DEFAULT 0,
+    games_played INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id, game_kind),
+    FOREIGN KEY(user_id) REFERENCES users(telegram_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS global_wallets (
+    user_id INTEGER PRIMARY KEY,
+    kyzma_coin_balance INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(telegram_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS matchmaking_queue (
+    user_id INTEGER PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    game_kind TEXT NOT NULL,
+    rated INTEGER NOT NULL,
+    anonymous INTEGER NOT NULL,
+    rating INTEGER NOT NULL DEFAULT 1000,
+    joined_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(telegram_user_id),
+    FOREIGN KEY(chat_id) REFERENCES chats(telegram_chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS game_views (
+    game_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    PRIMARY KEY(game_id, user_id),
+    UNIQUE(chat_id, message_id),
+    FOREIGN KEY(game_id) REFERENCES games(id),
+    FOREIGN KEY(user_id) REFERENCES users(telegram_user_id),
+    FOREIGN KEY(chat_id) REFERENCES chats(telegram_chat_id)
+);
+
 CREATE TABLE IF NOT EXISTS kyzma_coin_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     game_id TEXT NOT NULL,
@@ -853,6 +1287,9 @@ CREATE INDEX IF NOT EXISTS idx_games_active_message ON games(chat_id, message_id
 CREATE INDEX IF NOT EXISTS idx_games_chat_status ON games(chat_id, game_kind, status);
 CREATE INDEX IF NOT EXISTS idx_moves_game_move_number ON moves(game_id, move_number);
 CREATE INDEX IF NOT EXISTS idx_chat_user_stats_leaderboard ON chat_user_stats(chat_id, game_kind, rating DESC, wins DESC);
+CREATE INDEX IF NOT EXISTS idx_global_user_stats_leaderboard ON global_user_stats(game_kind, rating DESC, wins DESC);
+CREATE INDEX IF NOT EXISTS idx_matchmaking_queue_pool ON matchmaking_queue(game_kind, rated, joined_at);
+CREATE INDEX IF NOT EXISTS idx_game_views_user ON game_views(user_id, game_id);
 CREATE INDEX IF NOT EXISTS idx_kyzma_coin_events_user ON kyzma_coin_events(chat_id, user_id, game_kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_kyzma_coin_events_once
     ON kyzma_coin_events(game_id, user_id, reason);

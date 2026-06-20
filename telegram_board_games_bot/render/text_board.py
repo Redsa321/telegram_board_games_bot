@@ -17,7 +17,6 @@ from ..games.draughts import (
 )
 from ..i18n import Lang
 
-
 CALLBACK_LIMIT = 64
 TILE_EMPTY = "\u3000"
 TILE_BLACK_MAN = "⚫"
@@ -141,6 +140,10 @@ def render_draughts_keyboard(game_id: str, state: DraughtsState, lang: Lang) -> 
     if state.status is GameStatus.CONFIRMING:
         return render_draughts_confirmation_keyboard(game_id, lang)
     if state.status is GameStatus.FINISHED:
+        if state.global_game:
+            return InlineKeyboardMarkup([[
+                InlineKeyboardButton(i18n.stats_button(lang), callback_data=compact_callback_data(game_id, "stats")),
+            ]])
         again_label = i18n.accept_rematch_button(lang) if state.rematch_requested_by is not None else i18n.play_again_button(lang)
         return InlineKeyboardMarkup([[
             InlineKeyboardButton(again_label, callback_data=compact_callback_data(game_id, "again")),

@@ -1,5 +1,13 @@
 from telegram_board_games_bot.callbacks import apply_robot_turn
-from telegram_board_games_bot.games.draughts import BOARD_SIZE, Coord, DraughtsState, GameStatus, Piece, PieceColor, PieceKind
+from telegram_board_games_bot.games.draughts import (
+    BOARD_SIZE,
+    Coord,
+    DraughtsState,
+    GameStatus,
+    Piece,
+    PieceColor,
+    PieceKind,
+)
 from telegram_board_games_bot.games.robot import RobotDifficulty, choose_robot_move, robot_user_id
 
 

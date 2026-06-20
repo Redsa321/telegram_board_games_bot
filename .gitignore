@@ -1,6 +1,7 @@
 # Secrets and local configuration
 .env
 .env.*
+!.env.example
 
 # Virtual environments
 .venv/
@@ -38,6 +39,8 @@ htmlcov/
 # Logs and runtime files
 *.log
 *.pid
+*.db.lock
+backups/
 
 # Editors and OS files
 .idea/

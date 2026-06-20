@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from html import escape
 
 from telegram import Chat, Message, ReplyParameters, Update, User
@@ -9,7 +10,8 @@ from telegram.constants import ParseMode
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
-from . import i18n
+from . import __version__, i18n
+from .config import Config
 from .db import (
     Database,
     FinishGame,
@@ -47,10 +49,8 @@ from .render.text_board import (
     render_robot_difficulty_keyboard,
 )
 
-
 GAME_KIND_DRAUGHTS = "draughts"
 GAME_KIND_CHESS = "chess"
-GAME_KIND_WALLET = GAME_KIND_DRAUGHTS
 logger = logging.getLogger(__name__)
 
 
@@ -67,6 +67,84 @@ async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lang = i18n.user_lang(update.effective_user)
     text = f"{i18n.command_list_text(lang)}\n\n{i18n.help_rules(lang)}\n\n{i18n.help_footer(lang)}"
     await update.effective_message.reply_text(text)
+
+
+async def handle_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None:
+        return
+    await update.effective_message.reply_text(i18n.about_text(i18n.user_lang(update.effective_user), __version__))
+
+
+async def handle_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None:
+        return
+    await update.effective_message.reply_text(i18n.privacy_text(i18n.user_lang(update.effective_user)))
+
+
+async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    user = update.effective_user
+    if msg is None or user is None:
+        return
+    lang = i18n.user_lang(user)
+    text = " ".join(context.args).strip()
+    if not text:
+        await msg.reply_text(i18n.feedback_usage(lang))
+        return
+    config = get_config(context)
+    if config.feedback_chat_id is None:
+        await msg.reply_text(i18n.feedback_unavailable(lang))
+        return
+    database = get_database(context)
+    await database.upsert_user(upsert_user_from_telegram(user))
+    if update.effective_chat:
+        await database.upsert_chat(upsert_chat_from_telegram(update.effective_chat))
+    game_id = None
+    if msg.reply_to_message is not None:
+        game = await database.get_game_by_message(msg.chat_id, msg.reply_to_message.message_id)
+        game_id = game.id if game else None
+    report = [
+        "Beta feedback",
+        f"From: {display_name(user)} ({telegram_user_id(user)})",
+        f"Chat: {msg.chat_id}",
+        f"Game ID: {game_id or 'not attached'}",
+        "",
+        text[:3000],
+    ]
+    await context.bot.send_message(chat_id=config.feedback_chat_id, text="\n".join(report))
+    await msg.reply_text(i18n.feedback_sent(lang, game_id))
+
+
+async def handle_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    user = update.effective_user
+    if msg is None or user is None:
+        return
+    config = get_config(context)
+    if config.admin_user_id is None or telegram_user_id(user) != config.admin_user_id:
+        await msg.reply_text("This command is available only to the bot administrator.")
+        return
+    database = get_database(context)
+    counts = await database.get_admin_status_counts()
+    database_size = sum(
+        path.stat().st_size
+        for path in (database.path, database.path.with_name(f"{database.path.name}-wal"))
+        if path.exists()
+    )
+    bot_data = context.application.bot_data
+    await msg.reply_text(
+        "\n".join([
+            f"Bot status · {__version__}",
+            f"Users: {counts['users']}",
+            f"Matchmaking queue: {counts['queued']}",
+            f"Confirming games: {counts['confirming_games']}",
+            f"Active games: {counts['active_games']}",
+            f"Active global games: {counts['global_games']}",
+            f"Database size: {format_file_size(database_size)}",
+            f"Errors since start: {bot_data.get('error_count', 0)}",
+            f"Last error: {bot_data.get('last_error', 'none')}",
+        ])
+    )
 
 
 async def handle_play_draughts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,6 +436,8 @@ async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if update.effective_chat:
         await database.upsert_chat(upsert_chat_from_telegram(update.effective_chat))
     stats = await database.ensure_user_stats(msg.chat_id, user_id, GAME_KIND_DRAUGHTS)
+    wallet = await database.ensure_global_wallet(user_id)
+    stats = replace(stats, kyzma_coin_balance=wallet.kyzma_coin_balance)
     await msg.reply_text(
         render_stats_text(lang, stats, user),
         parse_mode=ParseMode.HTML,
@@ -377,6 +457,8 @@ async def handle_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_chat:
         await database.upsert_chat(upsert_chat_from_telegram(update.effective_chat))
     stats = await database.ensure_user_stats(msg.chat_id, user_id, GAME_KIND_DRAUGHTS)
+    wallet = await database.ensure_global_wallet(user_id)
+    stats = replace(stats, kyzma_coin_balance=wallet.kyzma_coin_balance)
     await msg.reply_text(
         render_wallet_text(lang, stats, user),
         parse_mode=ParseMode.HTML,
@@ -471,7 +553,8 @@ async def resign_game(database: Database, db_game, state: DraughtsState, resigni
     state.result_reason = "resignation"
     state.selected = None
     state.must_continue_from = None
-    await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason))
+    if not await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason)):
+        return
     await database.update_game_state(GameStateUpdate(db_game.id, db_game.message_id, status_text(state), state, None))
     if db_game.rated:
         await database.update_stats_after_game(GameOutcome(
@@ -599,6 +682,18 @@ def status_text(state) -> str:
 
 def get_database(context: ContextTypes.DEFAULT_TYPE) -> Database:
     return context.application.bot_data["database"]
+
+
+def get_config(context: ContextTypes.DEFAULT_TYPE) -> Config:
+    return context.application.bot_data["config"]
+
+
+def format_file_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KiB"
+    return f"{size / (1024 * 1024):.1f} MiB"
 
 
 async def reply_text_with_retry(message: Message, text: str, attempts: int = 3, **kwargs):

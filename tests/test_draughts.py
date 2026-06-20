@@ -1,5 +1,6 @@
 from telegram_board_games_bot.games.draughts import (
     BOARD_SIZE,
+    NO_PROGRESS_DRAW_PLIES,
     Coord,
     DraughtsMove,
     DraughtsState,
@@ -10,7 +11,6 @@ from telegram_board_games_bot.games.draughts import (
     move_to_id,
     parse_move_id,
 )
-
 
 BLACK_USER = 10
 WHITE_USER = 20
@@ -121,3 +121,55 @@ def test_move_id_round_trips_and_state_json_uses_rust_names() -> None:
     assert restored.turn is PieceColor.WHITE
     assert "from" in original.to_json()
 
+
+def test_threefold_repetition_ends_in_a_draw() -> None:
+    state = empty_state()
+    place_king(state, c(2, 1), PieceColor.BLACK)
+    place_king(state, c(5, 6), PieceColor.WHITE)
+    state.position_history = [state.position_key()]
+
+    for move in (
+        mv(c(2, 1), [c(3, 2)]),
+        mv(c(5, 6), [c(4, 5)]),
+        mv(c(3, 2), [c(2, 1)]),
+        mv(c(4, 5), [c(5, 6)]),
+        mv(c(2, 1), [c(3, 2)]),
+        mv(c(5, 6), [c(4, 5)]),
+        mv(c(3, 2), [c(2, 1)]),
+        mv(c(4, 5), [c(5, 6)]),
+    ):
+        state.apply_move(move)
+
+    assert state.status is GameStatus.FINISHED
+    assert state.winner is None
+    assert state.result_reason == "threefold repetition"
+
+
+def test_no_progress_limit_ends_in_a_draw() -> None:
+    state = empty_state()
+    place_king(state, c(2, 1), PieceColor.BLACK)
+    place_king(state, c(5, 6), PieceColor.WHITE)
+    state.position_history = [state.position_key()]
+    state.no_progress_move_count = NO_PROGRESS_DRAW_PLIES - 1
+
+    state.apply_move(mv(c(2, 1), [c(3, 2)]))
+
+    assert state.status is GameStatus.FINISHED
+    assert state.winner is None
+    assert state.result_reason == "80 moves without a capture or promotion"
+
+
+def test_capture_resets_no_progress_clock_and_draw_state_round_trips() -> None:
+    state = empty_state()
+    place_man(state, c(2, 1), PieceColor.BLACK)
+    place_man(state, c(3, 2), PieceColor.WHITE)
+    place_man(state, c(7, 6), PieceColor.WHITE)
+    state.position_history = [state.position_key()]
+    state.no_progress_move_count = 12
+
+    state.apply_move(mv(c(2, 1), [c(4, 3)]))
+    restored = DraughtsState.from_json(state.to_json())
+
+    assert state.no_progress_move_count == 0
+    assert restored.no_progress_move_count == 0
+    assert restored.position_history == state.position_history

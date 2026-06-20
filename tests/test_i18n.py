@@ -11,6 +11,9 @@ def test_play_robot_is_advertised_in_command_menu_and_help_text() -> None:
     assert "/play_chess" in i18n.command_list_text(Lang.EN)
     assert "play_chess_robot" in command_names
     assert "/play_chess_robot" in i18n.command_list_text(Lang.EN)
+    assert "play_random" in command_names
+    assert "/play_random" in i18n.command_list_text(Lang.EN)
+    assert "global_stats" in command_names
     assert "wallet" in command_names
     assert "/wallet" in i18n.command_list_text(Lang.EN)
     assert "claim" in command_names
@@ -24,6 +27,8 @@ def test_start_message_explains_robot_games_and_coins() -> None:
     assert "Chess basics:" in text
     assert "/play_robot starts a free game against the robot." in text
     assert "/play_chess_robot starts a free chess game against the robot." in text
+    assert "/play_random" in text
+    assert "/global_stats" in text
     assert "divided by 5" in text
     assert "2x" in text
     assert "Win free robot games to earn coins." in text

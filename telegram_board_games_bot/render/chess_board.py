@@ -9,7 +9,6 @@ from ..games.draughts import PieceColor
 from ..i18n import Lang
 from .text_board import CALLBACK_LIMIT, truncate_to_byte_len
 
-
 TILE_EMPTY = "\u3000"
 WHITE_MARK = "▫"
 BLACK_MARK = "▪"

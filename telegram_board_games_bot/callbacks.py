@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import sqlite3
 import logging
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, replace
 
 from telegram import CallbackQuery, ReplyParameters, Update
 from telegram.constants import ParseMode
@@ -20,7 +20,7 @@ from .commands import (
     telegram_user_id,
     upsert_user_from_telegram,
 )
-from .db import Database, FinishGame, GameOutcome, GameStateUpdate, NewGame, NewMove, UpsertChat
+from .db import Database, FinishGame, GameOutcome, GameStateUpdate, NewGame, NewMove, UpsertChat, now_text
 from .economy import (
     award_finished_game_currency,
     charge_pvp_entry_fee_once,
@@ -38,6 +38,8 @@ from .games.draughts import (
     parse_move_id,
 )
 from .games.robot import RobotDifficulty, choose_robot_move, parse_difficulty
+from .global_matchmaking import edit_global_game_messages, finish_global_game, send_global_game_stats
+from .i18n import Lang
 from .render.text_board import (
     move_label,
     render_draughts_confirmation_keyboard,
@@ -45,7 +47,6 @@ from .render.text_board import (
     render_draughts_keyboard,
     render_draughts_message,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ async def dispatch_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_
     elif parsed.action == "resign":
         await handle_resign_callback(context, database, query, target, parsed.game_id)
     elif parsed.action == "stats":
-        await handle_stats_callback(context, database, query, target.chat_id, target.message_id)
+        await handle_stats_callback(context, database, query, target.chat_id, target.message_id, parsed.game_id)
     elif parsed.action == "again":
         await handle_again_callback(context, database, query, target, parsed.game_id)
     else:
@@ -168,6 +169,8 @@ async def handle_move_callback(context, database: Database, query: CallbackQuery
         await query.answer(i18n.wrong_game_kind(lang))
         return
     state = DraughtsState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is GameStatus.CONFIRMING:
         await query.answer(i18n.game_not_started(lang))
         return
@@ -212,6 +215,8 @@ async def handle_square_callback(
         await query.answer(i18n.wrong_game_kind(lang))
         return
     state = DraughtsState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is GameStatus.CONFIRMING:
         await query.answer(i18n.game_not_started(lang))
         return
@@ -259,6 +264,8 @@ async def handle_resign_callback(context, database: Database, query: CallbackQue
         await query.answer(i18n.game_not_found(lang))
         return
     state = DraughtsState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is GameStatus.CONFIRMING:
         await query.answer(i18n.game_not_started(lang))
         return
@@ -287,13 +294,22 @@ async def handle_stats_callback(
     query: CallbackQuery,
     chat_id: int | None,
     reply_to_message_id: int | None,
+    game_id: str,
 ) -> None:
     lang = i18n.user_lang(query.from_user)
     await database.upsert_user(upsert_user_from_telegram(query.from_user))
     if chat_id is None:
         await query.answer(i18n.stats_group_only(lang))
         return
+    db_game = await database.get_game(game_id)
+    if db_game is not None:
+        state = DraughtsState.from_json(db_game.state)
+        if state.global_game:
+            await send_global_game_stats(context, database, query, GAME_KIND_DRAUGHTS, reply_to_message_id)
+            return
     stats = await database.ensure_user_stats(chat_id, telegram_user_id(query.from_user), GAME_KIND_DRAUGHTS)
+    wallet = await database.ensure_global_wallet(telegram_user_id(query.from_user))
+    stats = replace(stats, kyzma_coin_balance=wallet.kyzma_coin_balance)
     reply_parameters = (
         ReplyParameters(message_id=reply_to_message_id)
         if reply_to_message_id is not None
@@ -626,6 +642,9 @@ async def handle_again_callback(context, database: Database, query: CallbackQuer
         await query.answer(i18n.wrong_game_kind(lang))
         return
     old_state = DraughtsState.from_json(old_game.state)
+    if old_state.global_game:
+        await query.answer("Use /play_random to find another global opponent.")
+        return
     if old_state.robot_user_id is not None:
         await handle_robot_again_callback(context, database, query, target, old_state)
         return
@@ -707,6 +726,8 @@ async def play_move_and_update(
 ) -> None:
     move_number = state.move_number
     result = state.apply_move(move)
+    if state.global_game and result.turn_ended and state.status is GameStatus.IN_PROGRESS:
+        state.turn_started_at = now_text()
     await database.insert_move(NewMove(
         game_id=db_game.id,
         move_number=move_number,
@@ -736,7 +757,11 @@ async def play_move_and_update(
 
 
 async def finish_rated_game(database: Database, db_game, state: DraughtsState) -> None:
-    await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason))
+    if not await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason)):
+        return
+    if state.global_game:
+        await finish_global_game(database, db_game, state)
+        return
     if db_game.rated:
         await database.update_stats_after_game(GameOutcome(
             chat_id=db_game.chat_id,
@@ -749,6 +774,11 @@ async def finish_rated_game(database: Database, db_game, state: DraughtsState) -
 
 
 async def edit_game_message(context, target: MessageTarget, game_id: str, state: DraughtsState, rated: bool, database: Database) -> None:
+    if state.global_game:
+        db_game = await database.get_game(game_id)
+        if db_game is not None:
+            await edit_global_game_messages(context.bot, database, db_game, state)
+        return
     black = await database.get_user(state.black_user_id)
     white = await database.get_user(state.white_user_id)
     lang_source = white if state.robot_user_id == state.black_user_id else black

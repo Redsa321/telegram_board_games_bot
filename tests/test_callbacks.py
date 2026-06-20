@@ -1,6 +1,11 @@
 import asyncio
 
-from telegram_board_games_bot.callbacks import ParsedCallback, claim_inline_invite, ensure_inline_challenger_user, ensure_inline_chat
+from telegram_board_games_bot.callbacks import (
+    ParsedCallback,
+    claim_inline_invite,
+    ensure_inline_challenger_user,
+    ensure_inline_chat,
+)
 from telegram_board_games_bot.commands import GAME_KIND_DRAUGHTS
 from telegram_board_games_bot.db import Database, NewGame, UpsertUser
 from telegram_board_games_bot.games.draughts import DraughtsState

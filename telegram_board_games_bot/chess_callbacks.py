@@ -12,7 +12,6 @@ from telegram.ext import ContextTypes
 from . import i18n
 from .commands import (
     GAME_KIND_CHESS,
-    GAME_KIND_WALLET,
     create_chess_game_message,
     create_chess_robot_game_message,
     display_name_from_db_user,
@@ -22,7 +21,7 @@ from .commands import (
     telegram_user_id,
     upsert_user_from_telegram,
 )
-from .db import Database, FinishGame, GameOutcome, GameStateUpdate, NewGame, NewMove
+from .db import Database, FinishGame, GameOutcome, GameStateUpdate, NewGame, NewMove, now_text
 from .economy import (
     CHESS_PRIZE_MULTIPLIER_FACTOR,
     CHESS_PVP_COST_MULTIPLIER,
@@ -34,13 +33,14 @@ from .economy import (
 from .games.chess_game import ChessState, ChessStatus, valid_square_name
 from .games.chess_robot import choose_chess_robot_move
 from .games.robot import RobotDifficulty, parse_difficulty
+from .global_matchmaking import edit_global_game_messages, finish_global_game, send_global_game_stats
+from .i18n import Lang
 from .render.chess_board import (
     render_chess_confirmation_keyboard,
     render_chess_confirmation_message,
     render_chess_keyboard,
     render_chess_message,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ async def dispatch_chess_callback(query: CallbackQuery, context: ContextTypes.DE
     elif parsed.action == "resign":
         await handle_chess_resign_callback(context, database, query, target, parsed.game_id)
     elif parsed.action == "stats":
-        await handle_chess_stats_callback(context, database, query, target.chat_id, target.message_id)
+        await handle_chess_stats_callback(context, database, query, target.chat_id, target.message_id, parsed.game_id)
     else:
         await query.answer()
 
@@ -229,7 +229,7 @@ async def create_chess_confirmation_message(
         target.chat_id,
         challenger_id,
         joiner_id,
-        GAME_KIND_WALLET,
+        GAME_KIND_CHESS,
         state,
     )
     if insufficient_user_ids:
@@ -260,6 +260,8 @@ async def handle_chess_accept_callback(context, database: Database, query: Callb
         await query.answer(i18n.wrong_chess_game_kind(lang))
         return
     state = ChessState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is not ChessStatus.CONFIRMING:
         await query.answer(i18n.game_not_waiting_for_accept(lang))
         return
@@ -274,7 +276,7 @@ async def handle_chess_accept_callback(context, database: Database, query: Callb
         db_game.chat_id,
         db_game.black_user_id,
         db_game.white_user_id,
-        GAME_KIND_WALLET,
+        GAME_KIND_CHESS,
         state,
     )
     if insufficient_user_ids:
@@ -294,7 +296,7 @@ async def handle_chess_accept_callback(context, database: Database, query: Callb
     state.accepted_user_ids = sorted(accepted)
 
     if {state.black_user_id, state.white_user_id}.issubset(accepted):
-        charge_result = await charge_pvp_entry_fee_once(database, db_game, state, GAME_KIND_WALLET)
+        charge_result = await charge_pvp_entry_fee_once(database, db_game, state, GAME_KIND_CHESS)
         if not charge_result.success:
             state.accepted_user_ids = [
                 accepted_user_id
@@ -373,6 +375,8 @@ async def handle_chess_square_callback(
         await query.answer(i18n.wrong_chess_game_kind(lang))
         return
     state = ChessState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is ChessStatus.CONFIRMING:
         await query.answer(i18n.game_not_started(lang))
         return
@@ -442,6 +446,8 @@ async def handle_chess_promotion_callback(
         await query.answer(i18n.wrong_chess_game_kind(lang))
         return
     state = ChessState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is not ChessStatus.IN_PROGRESS:
         await query.answer(i18n.game_already_over(lang) if state.status is ChessStatus.FINISHED else i18n.game_not_started(lang))
         return
@@ -471,6 +477,8 @@ async def handle_chess_resign_callback(context, database: Database, query: Callb
         await query.answer(i18n.wrong_chess_game_kind(lang))
         return
     state = ChessState.from_json(db_game.state)
+    if state.global_game:
+        lang = Lang.EN
     if state.status is ChessStatus.CONFIRMING:
         await query.answer(i18n.game_not_started(lang))
         return
@@ -494,16 +502,23 @@ async def handle_chess_stats_callback(
     query: CallbackQuery,
     chat_id: int | None,
     reply_to_message_id: int | None,
+    game_id: str,
 ) -> None:
     lang = i18n.user_lang(query.from_user)
     await database.upsert_user(upsert_user_from_telegram(query.from_user))
     if chat_id is None:
         await query.answer(i18n.stats_group_only(lang))
         return
+    db_game = await database.get_game(game_id)
+    if db_game is not None:
+        state = ChessState.from_json(db_game.state)
+        if state.global_game:
+            await send_global_game_stats(context, database, query, GAME_KIND_CHESS, reply_to_message_id)
+            return
     user_id = telegram_user_id(query.from_user)
     chess_stats = await database.ensure_user_stats(chat_id, user_id, GAME_KIND_CHESS)
-    wallet_stats = await database.ensure_user_stats(chat_id, user_id, GAME_KIND_WALLET)
-    stats = replace(chess_stats, kyzma_coin_balance=wallet_stats.kyzma_coin_balance)
+    wallet = await database.ensure_global_wallet(user_id)
+    stats = replace(chess_stats, kyzma_coin_balance=wallet.kyzma_coin_balance)
     reply_parameters = ReplyParameters(message_id=reply_to_message_id) if reply_to_message_id is not None else None
     await query.answer()
     await context.bot.send_message(
@@ -527,6 +542,8 @@ async def play_chess_move_and_update(
     move_number = board.fullmove_number
     move_text = board.san(move)
     state.apply_move(move)
+    if state.global_game and state.status is ChessStatus.IN_PROGRESS:
+        state.turn_started_at = now_text()
     await database.insert_move(NewMove(
         game_id=db_game.id,
         move_number=move_number,
@@ -555,7 +572,11 @@ async def play_chess_move_and_update(
 
 
 async def finish_chess_game(database: Database, db_game, state: ChessState) -> None:
-    await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason))
+    if not await database.finish_game(FinishGame(db_game.id, state.winner_user_id(), state.result_reason)):
+        return
+    if state.global_game:
+        await finish_global_game(database, db_game, state)
+        return
     if db_game.rated:
         await database.update_stats_after_game(GameOutcome(
             chat_id=db_game.chat_id,
@@ -564,10 +585,15 @@ async def finish_chess_game(database: Database, db_game, state: ChessState) -> N
             white_user_id=db_game.white_user_id,
             winner_user_id=state.winner_user_id(),
         ))
-    await award_finished_game_currency(database, db_game, state, GAME_KIND_WALLET)
+    await award_finished_game_currency(database, db_game, state, GAME_KIND_CHESS)
 
 
 async def edit_chess_game_message(context, target: MessageTarget, game_id: str, state: ChessState, rated: bool, database: Database) -> None:
+    if state.global_game:
+        db_game = await database.get_game(game_id)
+        if db_game is not None:
+            await edit_global_game_messages(context.bot, database, db_game, state)
+        return
     white = await database.get_user(state.white_user_id)
     black = await database.get_user(state.black_user_id)
     lang = i18n.db_user_lang(white)

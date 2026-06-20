@@ -6,7 +6,6 @@ import chess
 
 from .robot import DIFFICULTY_LABELS, RobotDifficulty
 
-
 CHESS_ROBOT_USER_IDS = {
     RobotDifficulty.EASY: -2001,
     RobotDifficulty.NORMAL: -2002,

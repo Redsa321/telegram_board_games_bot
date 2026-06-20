@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram Board Games Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telegrambot
+Group=telegrambot
+WorkingDirectory=/opt/telegram-board-games-bot
+EnvironmentFile=/opt/telegram-board-games-bot/.env
+ExecStart=/opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

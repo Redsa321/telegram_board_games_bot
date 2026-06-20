@@ -52,10 +52,12 @@ def test_daily_claim_is_once_per_day(tmp_path) -> None:
         database = Database.connect(str(tmp_path / "bot.db"))
         await database.run_migrations()
         await database.upsert_chat(UpsertChat(100, "group", "group"))
+        await database.upsert_chat(UpsertChat(200, "other group", "group"))
         await database.upsert_user(UpsertUser(10, "alice", "Alice", None, "en"))
 
         first = await claim_daily_kyzma_bonus(database, 100, 10, "draughts", date(2026, 6, 18))
         second = await claim_daily_kyzma_bonus(database, 100, 10, "draughts", date(2026, 6, 18))
+        other_chat = await claim_daily_kyzma_bonus(database, 200, 10, "chess", date(2026, 6, 18))
         next_day = await claim_daily_kyzma_bonus(database, 100, 10, "draughts", date(2026, 6, 19))
 
         assert first.claimed is True
@@ -63,6 +65,8 @@ def test_daily_claim_is_once_per_day(tmp_path) -> None:
         assert first.balance == STARTER_KYZMA_COINS + DAILY_CLAIM_KYZMA_COINS
         assert second.claimed is False
         assert second.balance == first.balance
+        assert other_chat.claimed is False
+        assert other_chat.balance == first.balance
         assert next_day.claimed is True
         assert next_day.balance == STARTER_KYZMA_COINS + DAILY_CLAIM_KYZMA_COINS * 2
         database.close()
@@ -115,11 +119,11 @@ def test_award_finished_game_currency_is_idempotent(tmp_path) -> None:
 
         first = await award_finished_game_currency(database, DbGameStub(), state, "draughts")
         second = await award_finished_game_currency(database, DbGameStub(), state, "draughts")
-        stats = await database.get_user_stats(100, 10, "draughts")
+        wallet = await database.get_global_wallet(10)
 
         assert first is True
         assert second is False
-        assert stats.kyzma_coin_balance == STARTER_KYZMA_COINS + 30
+        assert wallet.kyzma_coin_balance == STARTER_KYZMA_COINS + 30
         database.close()
 
     asyncio.run(scenario())
@@ -134,8 +138,8 @@ def test_charge_entry_fee_debits_both_players_once(tmp_path) -> None:
         await database.upsert_user(UpsertUser(20, "bob", "Bob", None, "en"))
         first = await database.charge_kyzma_coins_once("game-1", 100, (10, 20), "draughts", 10, "pvp_entry_fee")
         second = await database.charge_kyzma_coins_once("game-1", 100, (10, 20), "draughts", 10, "pvp_entry_fee")
-        alice = await database.get_user_stats(100, 10, "draughts")
-        bob = await database.get_user_stats(100, 20, "draughts")
+        alice = await database.get_global_wallet(10)
+        bob = await database.ensure_global_wallet(20)
 
         assert first.success is True
         assert first.already_charged is False
@@ -158,13 +162,13 @@ def test_charge_entry_fee_rejects_insufficient_balance(tmp_path) -> None:
         await database.award_kyzma_coins_once("seed-10", 100, 10, "draughts", 25, None, "seed")
 
         result = await database.charge_kyzma_coins_once("game-1", 100, (10, 20), "draughts", 110, "pvp_entry_fee")
-        alice = await database.get_user_stats(100, 10, "draughts")
-        bob = await database.get_user_stats(100, 20, "draughts")
+        alice = await database.get_global_wallet(10)
+        bob = await database.ensure_global_wallet(20)
 
         assert result.success is False
         assert result.insufficient_user_ids == (20,)
         assert alice.kyzma_coin_balance == STARTER_KYZMA_COINS + 25
-        assert bob is None
+        assert bob.kyzma_coin_balance == STARTER_KYZMA_COINS
         database.close()
 
     asyncio.run(scenario())

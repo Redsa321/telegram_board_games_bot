@@ -49,10 +49,18 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("play_chess", "command_play_chess"),
     ("play_robot", "command_play_robot"),
     ("play_chess_robot", "command_play_chess_robot"),
+    ("play_random", "command_play_random"),
+    ("cancel_global", "command_cancel_global"),
+    ("resume_global", "command_resume_global"),
+    ("global_stats", "command_global_stats"),
     ("stats", "command_stats"),
     ("wallet", "command_wallet"),
     ("claim", "command_claim"),
     ("top", "command_top"),
+    ("global_top", "command_global_top"),
+    ("feedback", "command_feedback"),
+    ("privacy", "command_privacy"),
+    ("about", "command_about"),
     ("resign", "command_resign"),
 )
 
@@ -60,7 +68,7 @@ COMMANDS: tuple[tuple[str, str], ...] = (
 def welcome(lang: Lang) -> str:
     return tr(lang,
         en=(
-            "Hi! I run board games directly inside Telegram messages.\n\n"
+            "Hi! This is a public beta of board games played directly inside Telegram messages.\n\n"
             "Draughts basics:\n"
             "• White moves first.\n"
             "• Captures are mandatory, including continued captures.\n"
@@ -84,10 +92,15 @@ def welcome(lang: Lang) -> str:
             "• Choose Easy, Normal, or Hard.\n"
             "• Robot games do not change rating.\n"
             "• Win free robot games to earn coins.\n\n"
+            "Global games:\n"
+            "• Use /play_random in private chat for an English-language random match.\n"
+            "• Choose rated or unrated, and choose whether your name is visible.\n"
+            "• Both players confirm the move timeout: 2 minutes for draughts or 3 for chess by default.\n"
+            "• Use /global_stats for global chess and draughts ranks.\n\n"
             "Use /wallet for your balance, /claim for a daily coin bonus, /stats for full stats, and /top for the leaderboard."
         ),
         uk=(
-            "Привіт! Я запускаю настільні ігри прямо в повідомленнях Telegram.\n\n"
+            "Привіт! Це публічна бета-версія настільних ігор прямо в повідомленнях Telegram.\n\n"
             "Основи шашок:\n"
             "• Білі ходять першими.\n"
             "• Взяття обов'язкове, включно з продовженням серії взяттів.\n"
@@ -111,10 +124,15 @@ def welcome(lang: Lang) -> str:
             "• Оберіть Easy, Normal або Hard.\n"
             "• Ігри з роботом не змінюють рейтинг.\n"
             "• Перемагайте в безкоштовних іграх з роботом, щоб заробляти монети.\n\n"
+            "Глобальні ігри:\n"
+            "• Використовуйте /play_random у приватному чаті для випадкової гри англійською.\n"
+            "• Оберіть рейтингову або нерейтингову гру та видимість свого імені.\n"
+            "• Обидва гравці підтверджують час на хід: типово 2 хвилини для шашок і 3 для шахів.\n"
+            "• Використовуйте /global_stats для глобальних рангів у шахах і шашках.\n\n"
             "Використовуйте /wallet для балансу, /claim для щоденного бонусу монет, /stats для повної статистики, а /top для таблиці лідерів."
         ),
         ru=(
-            "Привет! Я запускаю настольные игры прямо в сообщениях Telegram.\n\n"
+            "Привет! Это публичная бета-версия настольных игр прямо в сообщениях Telegram.\n\n"
             "Основы шашек:\n"
             "• Белые ходят первыми.\n"
             "• Взятие обязательно, включая продолжение серии взятий.\n"
@@ -138,10 +156,15 @@ def welcome(lang: Lang) -> str:
             "• Выберите Easy, Normal или Hard.\n"
             "• Игры с роботом не меняют рейтинг.\n"
             "• Побеждайте в бесплатных играх с роботом, чтобы зарабатывать монеты.\n\n"
+            "Глобальные игры:\n"
+            "• Используйте /play_random в личном чате для случайной игры на английском.\n"
+            "• Выберите рейтинговую или нерейтинговую игру и видимость своего имени.\n"
+            "• Оба игрока подтверждают время на ход: по умолчанию 2 минуты для шашек и 3 для шахмат.\n"
+            "• Используйте /global_stats для глобальных рангов в шахматах и шашках.\n\n"
             "Используйте /wallet для баланса, /claim для ежедневного бонуса монет, /stats для полной статистики, а /top для таблицы лидеров."
         ),
         pl=(
-            "Cześć! Uruchamiam gry planszowe bezpośrednio w wiadomościach Telegram.\n\n"
+            "Cześć! To publiczna beta gier planszowych bezpośrednio w wiadomościach Telegram.\n\n"
             "Podstawy warcabów:\n"
             "• Białe zaczynają.\n"
             "• Bicie jest obowiązkowe, także dalsze bicia w serii.\n"
@@ -165,6 +188,11 @@ def welcome(lang: Lang) -> str:
             "• Wybierz Easy, Normal albo Hard.\n"
             "• Gry z robotem nie zmieniają rankingu.\n"
             "• Wygrywaj darmowe gry z robotem, aby zarabiać monety.\n\n"
+            "Gry globalne:\n"
+            "• Użyj /play_random w prywatnym czacie, aby znaleźć losową grę po angielsku.\n"
+            "• Wybierz grę rankingową lub towarzyską oraz widoczność nazwy.\n"
+            "• Obaj gracze potwierdzają czas ruchu: domyślnie 2 minuty w warcabach i 3 w szachach.\n"
+            "• Użyj /global_stats, aby zobaczyć globalne rangi szachów i warcabów.\n\n"
             "Użyj /wallet po saldo, /claim po dzienny bonus monet, /stats po pełne statystyki, a /top po tabelę liderów."
         ))
 
@@ -183,6 +211,39 @@ def help_footer(lang: Lang) -> str:
         uk="Почніть гру через /play_draughts або /play_chess, після цього інший гравець може натиснути «Приєднатися».",
         ru="Начните игру через /play_draughts или /play_chess, после этого другой игрок может нажать «Присоединиться».",
         pl="Zacznij grę za pomocą /play_draughts albo /play_chess, a inny gracz będzie mógł nacisnąć „Dołącz”.")
+
+
+def about_text(lang: Lang, version: str) -> str:
+    return tr(
+        lang,
+        en=f"Telegram Board Games Bot\nVersion {version}\n\nPublic beta with draughts, chess, robot games, global matchmaking, ratings, and kyzma-coins. Use /feedback to report a problem.",
+        uk=f"Telegram Board Games Bot\nВерсія {version}\n\nПублічна бета-версія з шашками, шахами, роботами, глобальним пошуком, рейтингами та кузьмакоінами. Повідомити про проблему: /feedback.",
+        ru=f"Telegram Board Games Bot\nВерсия {version}\n\nПубличная бета-версия с шашками, шахматами, роботами, глобальным поиском, рейтингами и кузьмакоинами. Сообщить о проблеме: /feedback.",
+        pl=f"Telegram Board Games Bot\nWersja {version}\n\nPubliczna beta z warcabami, szachami, robotami, globalnym dobieraniem graczy, rankingami i kyzma-coins. Zgłoś problem przez /feedback.",
+    )
+
+
+def privacy_text(lang: Lang) -> str:
+    return tr(
+        lang,
+        en=("Privacy\n\nThe bot stores Telegram user and chat IDs, usernames and names, game history, ratings, and coin transactions so games and accounts work across restarts. Anonymous global mode hides your name from your opponent; it does not remove your ID from bot storage. Feedback includes your user ID and may include a replied-to game ID. Contact the bot administrator through /feedback to request account-data deletion."),
+        uk=("Конфіденційність\n\nБот зберігає ID користувачів і чатів Telegram, імена, історію ігор, рейтинги та операції з монетами, щоб ігри й акаунти працювали після перезапуску. Анонімний глобальний режим приховує ім'я від суперника, але не видаляє ID зі сховища бота. Відгук містить ваш ID та може містити ID гри. Запит на видалення даних надішліть адміністратору через /feedback."),
+        ru=("Конфиденциальность\n\nБот хранит ID пользователей и чатов Telegram, имена, историю игр, рейтинги и операции с монетами, чтобы игры и аккаунты работали после перезапуска. Анонимный глобальный режим скрывает имя от соперника, но не удаляет ID из хранилища бота. Отзыв содержит ваш ID и может содержать ID игры. Запрос на удаление данных отправьте администратору через /feedback."),
+        pl=("Prywatność\n\nBot przechowuje identyfikatory użytkowników i czatów Telegram, nazwy, historię gier, rankingi i transakcje monet, aby gry i konta działały po restarcie. Tryb anonimowy ukrywa nazwę przed przeciwnikiem, ale nie usuwa ID z pamięci bota. Opinia zawiera ID użytkownika i może zawierać ID gry. Prośbę o usunięcie danych wyślij administratorowi przez /feedback."),
+    )
+
+
+def feedback_usage(lang: Lang) -> str:
+    return tr(lang, en="Usage: /feedback describe the problem. Reply to a game message to attach its game ID.", uk="Використання: /feedback опишіть проблему. Дайте відповідь на повідомлення гри, щоб додати її ID.", ru="Использование: /feedback опишите проблему. Ответьте на сообщение игры, чтобы добавить её ID.", pl="Użycie: /feedback opisz problem. Odpowiedz na wiadomość gry, aby dołączyć jej ID.")
+
+
+def feedback_unavailable(lang: Lang) -> str:
+    return tr(lang, en="Feedback is not configured yet.", uk="Зворотний зв'язок ще не налаштовано.", ru="Обратная связь ещё не настроена.", pl="Opinie nie są jeszcze skonfigurowane.")
+
+
+def feedback_sent(lang: Lang, game_id: str | None) -> str:
+    attached = f" Game ID: {game_id}." if game_id else ""
+    return tr(lang, en=f"Feedback sent. Thank you.{attached}", uk=f"Відгук надіслано. Дякуємо.{attached}", ru=f"Отзыв отправлен. Спасибо.{attached}", pl=f"Opinia została wysłana. Dziękujemy.{attached}")
 
 
 def command_start(lang: Lang) -> str:
@@ -209,6 +270,22 @@ def command_play_chess_robot(lang: Lang) -> str:
     return tr(lang, en="Play chess against the robot", uk="Зіграти в шахи проти робота", ru="Сыграть в шахматы против робота", pl="Zagraj w szachy przeciw robotowi")
 
 
+def command_play_random(lang: Lang) -> str:
+    return tr(lang, en="Play a random global opponent", uk="Зіграти з випадковим глобальним суперником", ru="Сыграть со случайным глобальным соперником", pl="Zagraj z losowym globalnym przeciwnikiem")
+
+
+def command_cancel_global(lang: Lang) -> str:
+    return tr(lang, en="Cancel or resign a global game", uk="Скасувати або здатися у глобальній грі", ru="Отменить глобальную игру или сдаться", pl="Anuluj albo poddaj globalną grę")
+
+
+def command_resume_global(lang: Lang) -> str:
+    return tr(lang, en="Restore your global game message", uk="Відновити повідомлення глобальної гри", ru="Восстановить сообщение глобальной игры", pl="Przywróć wiadomość globalnej gry")
+
+
+def command_global_stats(lang: Lang) -> str:
+    return tr(lang, en="Show global ratings and ranks", uk="Показати глобальні рейтинги та ранги", ru="Показать глобальные рейтинги и ранги", pl="Pokaż globalne rankingi i rangi")
+
+
 def command_stats(lang: Lang) -> str:
     return tr(lang, en="Show your draughts stats", uk="Показати вашу статистику шашок", ru="Показать вашу статистику шашек", pl="Pokaż swoje statystyki warcabów")
 
@@ -223,6 +300,22 @@ def command_claim(lang: Lang) -> str:
 
 def command_top(lang: Lang) -> str:
     return tr(lang, en="Show the draughts leaderboard", uk="Показати рейтинг гравців", ru="Показать рейтинг игроков", pl="Pokaż ranking graczy")
+
+
+def command_global_top(lang: Lang) -> str:
+    return tr(lang, en="Show the global leaderboard", uk="Показати глобальну таблицю лідерів", ru="Показать глобальную таблицу лидеров", pl="Pokaż globalną tabelę wyników")
+
+
+def command_feedback(lang: Lang) -> str:
+    return tr(lang, en="Send beta feedback", uk="Надіслати відгук про бета-версію", ru="Отправить отзыв о бета-версии", pl="Wyślij opinię o wersji beta")
+
+
+def command_privacy(lang: Lang) -> str:
+    return tr(lang, en="Show the privacy summary", uk="Показати інформацію про конфіденційність", ru="Показать информацию о конфиденциальности", pl="Pokaż informacje o prywatności")
+
+
+def command_about(lang: Lang) -> str:
+    return tr(lang, en="Show bot version and beta status", uk="Показати версію та статус бета", ru="Показать версию и статус бета", pl="Pokaż wersję i status beta")
 
 
 def command_resign(lang: Lang) -> str:

@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up Telegram Board Games Bot database
+
+[Service]
+Type=oneshot
+User=telegrambot
+Group=telegrambot
+WorkingDirectory=/opt/telegram-board-games-bot
+ExecStart=/opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup backup --database bot.db --output backups --keep 7
