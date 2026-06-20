@@ -18,8 +18,7 @@ from ..games.draughts import (
 from ..i18n import Lang
 
 CALLBACK_LIMIT = 64
-TILE_PADDING = "\u2800"
-TILE_EMPTY = "\u2800"
+TILE_EMPTY = "\u3000"
 TILE_PLAYABLE_EMPTY = "·"
 TILE_BLACK_MAN = "⚫"
 TILE_WHITE_MAN = "⚪"
@@ -171,12 +170,8 @@ def render_draughts_keyboard(game_id: str, state: DraughtsState, lang: Lang) -> 
 
 def tile_button_text(state: DraughtsState, coord: Coord) -> str:
     if is_captured_this_turn_square(state, coord):
-        return padded_tile(TILE_CAPTURE_TARGET)
-    return padded_tile(square_symbol(state, coord))
-
-
-def padded_tile(symbol: str) -> str:
-    return f"{TILE_PADDING}{symbol}{TILE_PADDING}"
+        return TILE_CAPTURE_TARGET
+    return square_symbol(state, coord)
 
 
 def is_captured_this_turn_square(state: DraughtsState, coord: Coord) -> bool:
