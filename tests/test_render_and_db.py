@@ -32,7 +32,7 @@ def test_renders_initial_message_and_keyboard() -> None:
     assert "Prize: 10 kyzma-coins ×3 = 30" in message
     assert "Turn: @bob — ⚪" in message
     assert len(keyboard.inline_keyboard) == 9
-    assert keyboard.inline_keyboard[2][1].text == "⚫"
+    assert keyboard.inline_keyboard[2][1].text == "\u2800⚫\u2800"
     assert keyboard.inline_keyboard[-1][0].text == "Resign"
 
 
@@ -75,8 +75,8 @@ def test_keyboard_keeps_square_symbols_while_encoding_selected_piece() -> None:
 
     keyboard = render_draughts_keyboard("game", state, Lang.EN)
 
-    assert keyboard.inline_keyboard[5][0].text == "⚪"
-    assert keyboard.inline_keyboard[4][1].text == "\u3000"
+    assert keyboard.inline_keyboard[5][0].text == "\u2800⚪\u2800"
+    assert keyboard.inline_keyboard[4][1].text == "\u2800·\u2800"
     assert keyboard.inline_keyboard[4][1].callback_data == "dg:game:sq:41:50"
 
 

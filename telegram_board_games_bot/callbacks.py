@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from dataclasses import dataclass, replace
@@ -47,6 +48,7 @@ from .render.text_board import (
     render_draughts_keyboard,
     render_draughts_message,
 )
+from .telegram_retry import edit_message_text_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     lang = i18n.user_lang(query.from_user)
     try:
-        await dispatch_callback(query, context)
+        lock = callback_game_lock(context, query.data)
+        async with lock:
+            await dispatch_callback(query, context)
     except Exception:
         await query.answer(i18n.generic_error(lang), show_alert=False)
         raise
@@ -180,6 +184,7 @@ async def handle_move_callback(context, database: Database, query: CallbackQuery
     user_id = telegram_user_id(query.from_user)
     if state.current_user_id() != user_id:
         await query.answer(i18n.not_your_turn(lang))
+        await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
     legal_moves = state.legal_moves()
     if parsed.action == "mv" and parsed.value:
@@ -226,6 +231,7 @@ async def handle_square_callback(
     user_id = telegram_user_id(query.from_user)
     if state.current_user_id() != user_id:
         await query.answer(i18n.not_your_turn(lang))
+        await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
     if not is_playable_square(coord):
         await query.answer()
@@ -243,6 +249,13 @@ async def handle_square_callback(
             await query.answer(i18n.capture_mandatory(lang) if state.has_forced_capture() else i18n.piece_no_legal_moves(lang))
             return
         state.selected = coord
+        await database.update_game_state(GameStateUpdate(
+            game_id=db_game.id,
+            message_id=target.message_id,
+            status=status_text(state),
+            state=state,
+            current_turn_user_id=state.current_user_id(),
+        ))
         await query.answer()
         await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
@@ -786,9 +799,20 @@ async def edit_game_message(context, target: MessageTarget, game_id: str, state:
     text = render_draughts_message(state, display_name_from_db_user(black), display_name_from_db_user(white), rated, lang)
     keyboard = render_draughts_keyboard(game_id, state, lang)
     if target.inline_message_id:
-        await context.bot.edit_message_text(inline_message_id=target.inline_message_id, text=text, reply_markup=keyboard)
+        await edit_message_text_with_retry(
+            context.bot,
+            inline_message_id=target.inline_message_id,
+            text=text,
+            reply_markup=keyboard,
+        )
     else:
-        await context.bot.edit_message_text(chat_id=target.chat_id, message_id=target.message_id, text=text, reply_markup=keyboard)
+        await edit_message_text_with_retry(
+            context.bot,
+            chat_id=target.chat_id,
+            message_id=target.message_id,
+            text=text,
+            reply_markup=keyboard,
+        )
 
 
 async def edit_confirmation_message(context, target: MessageTarget, game_id: str, state: DraughtsState, database: Database) -> None:
@@ -832,3 +856,14 @@ def apply_robot_turn(state: DraughtsState) -> list[tuple[DraughtsMove, int, bool
         result = state.apply_move(move)
         applied.append((move, move_number, bool(result.captured), state.to_json()))
     return applied
+
+
+def callback_game_lock(context, callback_data: str | None) -> asyncio.Lock:
+    parsed = ParsedCallback.parse(callback_data or "")
+    key = parsed.game_id if parsed is not None else callback_data or "unknown"
+    locks = context.application.bot_data.setdefault("draughts_game_locks", {})
+    lock = locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[key] = lock
+    return lock

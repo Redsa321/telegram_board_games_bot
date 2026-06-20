@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 from telegram import BotCommand
-from telegram.error import NetworkError, TelegramError, TimedOut
+from telegram.error import Conflict, NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -102,11 +102,19 @@ async def handle_error(update, context) -> None:
     bot_data = context.application.bot_data
     bot_data["error_count"] = int(bot_data.get("error_count", 0)) + 1
     bot_data["last_error"] = f"{datetime.now(UTC).isoformat()} · {type(context.error).__name__}: {context.error}"
+    if isinstance(context.error, Conflict):
+        logger.error(
+            "Telegram polling conflict: another process or webhook is using this bot token; stop the other bot instance"
+        )
+        return
     if isinstance(context.error, (TimedOut, NetworkError)):
         logger.warning(
-            "telegram network error while handling update",
-            exc_info=(type(context.error), context.error, context.error.__traceback__),
+            "temporary Telegram network error: %s",
+            context.error,
         )
+        return
+    if update is None and isinstance(context.error, TelegramError):
+        logger.warning("Telegram polling error: %s", context.error)
         return
     logger.exception(
         "telegram update handler failed",
@@ -166,6 +174,8 @@ def build_application(config: Config, database: Database) -> Application:
 def main() -> None:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     config = Config.from_env()
     database = Database.connect(config.database_url)
     process_lock = ProcessLock(database.path.with_name(f"{database.path.name}.lock"))
