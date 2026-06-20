@@ -215,6 +215,7 @@ class _InsufficientKyzmaBalance(Exception):
 class Database:
     def __init__(self, path: Path):
         self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -1064,12 +1065,15 @@ class Database:
 
 
 def database_path(database_url: str) -> Path:
+    if database_url.startswith("sqlite:///"):
+        path = database_url.removeprefix("sqlite:///")
+        return Path(path or "bot.db").expanduser()
     if database_url.startswith("sqlite://"):
         parsed = urlparse(database_url)
         if parsed.netloc and parsed.path:
-            return Path(f"/{parsed.netloc}{parsed.path}")
-        return Path(parsed.path.lstrip("/") or "bot.db")
-    return Path(database_url)
+            return Path(f"/{parsed.netloc}{parsed.path}").expanduser()
+        return Path(parsed.netloc or parsed.path.lstrip("/") or "bot.db").expanduser()
+    return Path(database_url).expanduser()
 
 
 def dump_state(state: Any) -> str:

@@ -33,6 +33,15 @@ make backup    # write a checked backup under backups/
 
 Only one bot process can use a database at a time. A second process exits before polling begins.
 
+For update-safe local storage, put the SQLite file outside the Git checkout and require it to exist:
+
+```dotenv
+DATABASE_URL=sqlite:////absolute/path/to/telegram-board-games-bot/bot.db
+DATABASE_REQUIRE_EXISTING=true
+```
+
+With the guard enabled, a wrong or missing path stops startup instead of creating an empty database. `make backup` automatically uses the database configured in `.env`.
+
 Before opening the beta to testers, rotate the BotFather token, place the new token only in `.env`, and keep that file readable only by the service account.
 
 ## Lubuntu 24.04 Hosting
@@ -80,3 +89,5 @@ Stop the bot before restoring a backup, then start it again. Backups are made on
 - `/privacy` describes stored account and game data.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
+Performance work is staged in [docs/optimization-plan.md](docs/optimization-plan.md).

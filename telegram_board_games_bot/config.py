@@ -10,6 +10,7 @@ class Config:
     database_url: str = "sqlite:///bot.db"
     admin_user_id: int | None = None
     feedback_chat_id: int | None = None
+    require_existing_database: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -22,6 +23,7 @@ class Config:
             database_url=os.getenv("DATABASE_URL", "sqlite:///bot.db"),
             admin_user_id=admin_user_id,
             feedback_chat_id=optional_int_env("FEEDBACK_CHAT_ID") or admin_user_id,
+            require_existing_database=optional_bool_env("DATABASE_REQUIRE_EXISTING", False),
         )
 
 
@@ -33,3 +35,15 @@ def optional_int_env(name: str) -> int | None:
         return int(value)
     except ValueError as error:
         raise RuntimeError(f"{name} must be an integer") from error
+
+
+def optional_bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be true or false")

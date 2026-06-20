@@ -34,7 +34,7 @@ from .commands import (
     handle_wallet,
 )
 from .config import Config
-from .db import Database
+from .db import Database, database_path
 from .global_matchmaking import (
     handle_cancel_global,
     handle_global_timeout_callback,
@@ -177,11 +177,18 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     config = Config.from_env()
+    configured_database_path = database_path(config.database_url)
+    if config.require_existing_database and not configured_database_path.is_file():
+        raise RuntimeError(
+            f"configured database does not exist: {configured_database_path}. "
+            "Refusing to create an empty replacement database."
+        )
     database = Database.connect(config.database_url)
     process_lock = ProcessLock(database.path.with_name(f"{database.path.name}.lock"))
     try:
         process_lock.acquire()
         database._run_migrations()
+        logger.info("using persistent database: %s", database.path.resolve())
         build_application(config, database).run_polling()
     finally:
         database.close()

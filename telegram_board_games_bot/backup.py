@@ -6,6 +6,10 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+from .db import database_path
+
 
 def backup_database(
     database_path: Path,
@@ -65,22 +69,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Back up or restore the bot's SQLite database.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     backup_parser = subparsers.add_parser("backup")
-    backup_parser.add_argument("--database", type=Path, default=Path("bot.db"))
+    backup_parser.add_argument("--database", type=Path)
     backup_parser.add_argument("--output", type=Path, default=Path("backups"))
     backup_parser.add_argument("--keep", type=int, default=7)
     restore_parser = subparsers.add_parser("restore")
     restore_parser.add_argument("--backup", type=Path, required=True)
-    restore_parser.add_argument("--database", type=Path, default=Path("bot.db"))
+    restore_parser.add_argument("--database", type=Path)
     return parser
+
+
+def configured_database_path() -> Path:
+    load_dotenv()
+    return database_path(os.getenv("DATABASE_URL", "sqlite:///bot.db"))
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    target_database = args.database or configured_database_path()
     if args.command == "backup":
-        print(backup_database(args.database, args.output, args.keep))
+        print(backup_database(target_database, args.output, args.keep))
     else:
-        restore_database(args.backup, args.database)
-        print(args.database)
+        restore_database(args.backup, target_database)
+        print(target_database)
 
 
 if __name__ == "__main__":

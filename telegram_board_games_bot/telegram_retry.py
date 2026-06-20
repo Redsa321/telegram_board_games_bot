@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any
 
-from telegram.error import BadRequest, Forbidden, NetworkError
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,19 @@ async def edit_message_text_with_retry(bot, *, attempts: int = 3, **kwargs: Any)
         except Forbidden as error:
             logger.warning("Telegram board message is unavailable", extra={"error": str(error)})
             return False
+        except RetryAfter as error:
+            delay = retry_after_seconds(error.retry_after) + 0.25
+            if attempt == attempts:
+                logger.warning(
+                    "Telegram board edit remained rate-limited after retries",
+                    extra={"retry_after": delay},
+                )
+                return False
+            logger.warning(
+                "Telegram rate-limited a board edit; retrying in %.2f seconds",
+                delay,
+            )
+            await asyncio.sleep(delay)
         except NetworkError as error:
             if attempt == attempts:
                 logger.warning(
@@ -34,3 +48,9 @@ async def edit_message_text_with_retry(bot, *, attempts: int = 3, **kwargs: Any)
                 return False
             await asyncio.sleep(0.5 * attempt)
     return False
+
+
+def retry_after_seconds(value: int | float | timedelta) -> float:
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    return float(value)

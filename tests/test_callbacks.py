@@ -180,13 +180,13 @@ def test_piece_selection_is_persisted_before_board_edit(tmp_path) -> None:
 
         restored = DraughtsState.from_json((await database.get_game(game.id)).state)
         assert restored.selected == Coord(5, 0)
-        assert bot.edits
+        assert bot.edits == []
         database.close()
 
     asyncio.run(scenario())
 
 
-def test_wrong_turn_tap_refreshes_stale_board(tmp_path) -> None:
+def test_wrong_turn_tap_does_not_create_another_board_edit(tmp_path) -> None:
     async def scenario() -> None:
         database = Database.connect(str(tmp_path / "bot.db"))
         await database.run_migrations()
@@ -219,8 +219,7 @@ def test_wrong_turn_tap_refreshes_stale_board(tmp_path) -> None:
         )
 
         assert query.answers
-        assert bot.edits
-        assert "Turn: @white" in bot.edits[-1]["text"]
+        assert bot.edits == []
         database.close()
 
     asyncio.run(scenario())

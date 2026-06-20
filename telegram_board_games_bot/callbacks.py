@@ -184,7 +184,6 @@ async def handle_move_callback(context, database: Database, query: CallbackQuery
     user_id = telegram_user_id(query.from_user)
     if state.current_user_id() != user_id:
         await query.answer(i18n.not_your_turn(lang))
-        await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
     legal_moves = state.legal_moves()
     if parsed.action == "mv" and parsed.value:
@@ -231,7 +230,6 @@ async def handle_square_callback(
     user_id = telegram_user_id(query.from_user)
     if state.current_user_id() != user_id:
         await query.answer(i18n.not_your_turn(lang))
-        await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
     if not is_playable_square(coord):
         await query.answer()
@@ -257,7 +255,6 @@ async def handle_square_callback(
             current_turn_user_id=state.current_user_id(),
         ))
         await query.answer()
-        await edit_game_message(context, target, db_game.id, state, db_game.rated, database)
         return
 
     from_coord = state.must_continue_from or state.selected or callback_selected

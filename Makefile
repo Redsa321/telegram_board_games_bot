@@ -34,7 +34,7 @@ lint: setup
 	$(PYTHON) -m ruff check .
 
 backup: setup
-	$(PYTHON) -m telegram_board_games_bot.backup backup --database bot.db --output backups --keep 7
+	$(PYTHON) -m telegram_board_games_bot.backup backup --output backups --keep 7
 
 help:
 	@echo "make        Start the bot (default)"
