@@ -31,6 +31,15 @@ make lint      # run Ruff
 make backup    # write a checked backup under backups/
 ```
 
+After the initial setup, use the update script to back up the configured
+database, pull the latest code, refresh dependencies, and start the bot:
+
+```bash
+./update-and-run.sh
+```
+
+Stop an already running bot with `Ctrl+C` before using the update script.
+
 Only one bot process can use a database at a time. A second process exits before polling begins.
 
 For update-safe local storage, put the SQLite file outside the Git checkout and require it to exist:

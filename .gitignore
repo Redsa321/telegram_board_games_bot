@@ -53,3 +53,6 @@ Thumbs.db
 # Local assistant metadata
 .agents/
 .codex/
+
+
+update-and-run.sh
