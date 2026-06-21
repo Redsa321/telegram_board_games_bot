@@ -93,6 +93,7 @@ Stop the bot before restoring a backup, then start it again. Backups are made on
 
 - `/feedback <message>` sends a report to the configured feedback chat. Reply to a board to attach its game ID.
 - `/admin_status` is limited to `ADMIN_USER_ID` and reports queue, active game, database, and error counts.
+- `/admin_message <text>` is limited to `ADMIN_USER_ID` and broadcasts to every active group known to the bot.
 - `/resume_global` recreates a deleted global game message.
 - `/cancel_global` leaves the queue, cancels timeout setup, or resigns an active global game.
 - `/privacy` describes stored account and game data.

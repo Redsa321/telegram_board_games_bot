@@ -6,7 +6,7 @@ from dataclasses import replace
 from html import escape
 
 from telegram import Chat, Message, ReplyParameters, Update, User
-from telegram.constants import ParseMode
+from telegram.constants import ChatMemberStatus, ChatType, ParseMode
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import ContextTypes
 
@@ -48,6 +48,7 @@ from .render.text_board import (
     render_draughts_message,
     render_robot_difficulty_keyboard,
 )
+from .telegram_retry import send_message_with_retry
 
 GAME_KIND_DRAUGHTS = "draughts"
 GAME_KIND_CHESS = "chess"
@@ -145,6 +146,62 @@ async def handle_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Last error: {bot_data.get('last_error', 'none')}",
         ])
     )
+
+
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    if msg is None or user is None or chat is None:
+        return
+    config = get_config(context)
+    if config.admin_user_id is None or telegram_user_id(user) != config.admin_user_id:
+        await msg.reply_text("This command is available only to the bot administrator.")
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("Send admin broadcasts in your private chat with the bot.")
+        return
+    text = admin_message_payload(msg.text)
+    if not text:
+        await msg.reply_text("Usage: /admin_message your message")
+        return
+    broadcast_text = text
+    if len(broadcast_text) > 4096:
+        await msg.reply_text("The broadcast is too long. Telegram messages can contain at most 4096 characters.")
+        return
+    database = get_database(context)
+    groups = await database.get_active_group_chats()
+    sent = 0
+    failed = 0
+    for group in groups:
+        if await send_message_with_retry(context.bot, chat_id=group.telegram_chat_id, text=broadcast_text):
+            sent += 1
+        else:
+            failed += 1
+        await asyncio.sleep(0.05)
+    await msg.reply_text(f"Broadcast complete. Sent: {sent}. Failed: {failed}. Known active groups: {len(groups)}.")
+
+
+async def handle_bot_membership_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    membership = update.my_chat_member
+    chat = update.effective_chat
+    if membership is None or chat is None or chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        return
+    database = get_database(context)
+    await database.upsert_chat(upsert_chat_from_telegram(chat))
+    active = membership.new_chat_member.status in {
+        ChatMemberStatus.ADMINISTRATOR,
+        ChatMemberStatus.MEMBER,
+        ChatMemberStatus.RESTRICTED,
+    }
+    await database.set_chat_active(chat.id, active)
+
+
+def admin_message_payload(message_text: str | None) -> str:
+    if not message_text:
+        return ""
+    parts = message_text.split(maxsplit=1)
+    return parts[1].strip() if len(parts) == 2 else ""
 
 
 async def handle_play_draughts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

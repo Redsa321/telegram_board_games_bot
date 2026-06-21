@@ -50,6 +50,34 @@ async def edit_message_text_with_retry(bot, *, attempts: int = 3, **kwargs: Any)
     return False
 
 
+async def send_message_with_retry(bot, *, attempts: int = 3, **kwargs: Any) -> bool:
+    for attempt in range(1, attempts + 1):
+        try:
+            await bot.send_message(**kwargs)
+            return True
+        except RetryAfter as error:
+            delay = retry_after_seconds(error.retry_after) + 0.25
+            if attempt == attempts:
+                logger.warning("Telegram broadcast remained rate-limited", extra={"retry_after": delay})
+                return False
+            await asyncio.sleep(delay)
+        except (BadRequest, Forbidden) as error:
+            logger.warning(
+                "Telegram rejected an admin broadcast destination",
+                extra={"chat_id": kwargs.get("chat_id"), "error": str(error)},
+            )
+            return False
+        except NetworkError as error:
+            if attempt == attempts:
+                logger.warning(
+                    "Telegram broadcast failed after retries",
+                    extra={"chat_id": kwargs.get("chat_id"), "error": str(error)},
+                )
+                return False
+            await asyncio.sleep(0.5 * attempt)
+    return False
+
+
 def retry_after_seconds(value: int | float | timedelta) -> float:
     if isinstance(value, timedelta):
         return value.total_seconds()

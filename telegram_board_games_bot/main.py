@@ -5,11 +5,12 @@ import logging
 from datetime import UTC, datetime
 
 from dotenv import load_dotenv
-from telegram import BotCommand
+from telegram import BotCommand, Update
 from telegram.error import Conflict, NetworkError, TelegramError, TimedOut
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    ChatMemberHandler,
     ChosenInlineResultHandler,
     CommandHandler,
     InlineQueryHandler,
@@ -20,7 +21,9 @@ from .callbacks import handle_callback
 from .chess_callbacks import handle_chess_callback
 from .commands import (
     handle_about,
+    handle_admin_message,
     handle_admin_status,
+    handle_bot_membership_update,
     handle_claim,
     handle_feedback,
     handle_help,
@@ -159,7 +162,9 @@ def build_application(config: Config, database: Database) -> Application:
     application.add_handler(CommandHandler("privacy", handle_privacy))
     application.add_handler(CommandHandler("about", handle_about))
     application.add_handler(CommandHandler("admin_status", handle_admin_status))
+    application.add_handler(CommandHandler("admin_message", handle_admin_message))
     application.add_handler(CommandHandler("resign", handle_resign))
+    application.add_handler(ChatMemberHandler(handle_bot_membership_update, ChatMemberHandler.MY_CHAT_MEMBER))
     application.add_handler(CallbackQueryHandler(handle_matchmaking_callback, pattern=r"^mm:"))
     application.add_handler(CallbackQueryHandler(handle_global_timeout_callback, pattern=r"^gmt:"))
     application.add_handler(CallbackQueryHandler(handle_stats_view_callback, pattern=r"^st:"))
@@ -189,7 +194,7 @@ def main() -> None:
         process_lock.acquire()
         database._run_migrations()
         logger.info("using persistent database: %s", database.path.resolve())
-        build_application(config, database).run_polling()
+        build_application(config, database).run_polling(allowed_updates=Update.ALL_TYPES)
     finally:
         database.close()
         process_lock.release()

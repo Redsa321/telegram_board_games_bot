@@ -44,6 +44,14 @@ class DbUser:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class DbChat:
+    telegram_chat_id: int
+    title: str | None
+    kind: str | None
+    is_active: bool
+
+
 @dataclass
 class DbGame:
     id: str
@@ -233,6 +241,7 @@ class Database:
         self._maybe_migrate_early_games_table()
         self.conn.executescript(SCHEMA_SQL)
         self._add_column_if_missing("users", "language_code", "TEXT")
+        self._add_column_if_missing("chats", "is_active", "INTEGER NOT NULL DEFAULT 1")
         self._add_column_if_missing("games", "inline_message_id", "TEXT")
         self._add_column_if_missing("chat_user_stats", "kyzma_coin_balance", "INTEGER NOT NULL DEFAULT 0")
         self._add_column_if_missing("chat_user_stats", "starter_kyzma_granted", "INTEGER NOT NULL DEFAULT 0")
@@ -382,11 +391,38 @@ class Database:
             ON CONFLICT(telegram_chat_id) DO UPDATE SET
                 title = excluded.title,
                 kind = excluded.kind,
+                is_active = 1,
                 updated_at = excluded.updated_at
             """,
             (chat.telegram_chat_id, chat.title, chat.kind, now, now),
         )
         self.conn.commit()
+
+    async def set_chat_active(self, chat_id: int, active: bool) -> None:
+        self.conn.execute(
+            "UPDATE chats SET is_active = ?, updated_at = ? WHERE telegram_chat_id = ?",
+            (int(active), now_text(), chat_id),
+        )
+        self.conn.commit()
+
+    async def get_active_group_chats(self) -> list[DbChat]:
+        rows = self.conn.execute(
+            """
+            SELECT telegram_chat_id, title, kind, is_active
+            FROM chats
+            WHERE kind IN ('group', 'supergroup') AND is_active = 1
+            ORDER BY telegram_chat_id
+            """
+        ).fetchall()
+        return [
+            DbChat(
+                telegram_chat_id=int(row["telegram_chat_id"]),
+                title=row["title"],
+                kind=row["kind"],
+                is_active=bool(row["is_active"]),
+            )
+            for row in rows
+        ]
 
     async def create_game(self, game: NewGame) -> DbGame:
         game_id = str(uuid.uuid4())
@@ -1144,6 +1180,7 @@ CREATE TABLE IF NOT EXISTS chats (
     telegram_chat_id INTEGER PRIMARY KEY,
     title TEXT,
     kind TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
