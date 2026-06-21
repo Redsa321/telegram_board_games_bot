@@ -21,6 +21,7 @@ from .callbacks import handle_callback
 from .chess_callbacks import handle_chess_callback
 from .commands import (
     handle_about,
+    handle_admin_groups,
     handle_admin_message,
     handle_admin_status,
     handle_bot_membership_update,
@@ -162,6 +163,7 @@ def build_application(config: Config, database: Database) -> Application:
     application.add_handler(CommandHandler("privacy", handle_privacy))
     application.add_handler(CommandHandler("about", handle_about))
     application.add_handler(CommandHandler("admin_status", handle_admin_status))
+    application.add_handler(CommandHandler("admin_groups", handle_admin_groups))
     application.add_handler(CommandHandler("admin_message", handle_admin_message))
     application.add_handler(CommandHandler("resign", handle_resign))
     application.add_handler(ChatMemberHandler(handle_bot_membership_update, ChatMemberHandler.MY_CHAT_MEMBER))

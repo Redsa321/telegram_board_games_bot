@@ -424,6 +424,38 @@ class Database:
             for row in rows
         ]
 
+    async def search_group_chats(self, search: str | None = None) -> list[DbChat]:
+        parameters: tuple[str, ...] = ()
+        search_clause = ""
+        if search:
+            search_clause = """
+                AND (
+                    LOWER(COALESCE(title, '')) LIKE ?
+                    OR CAST(telegram_chat_id AS TEXT) LIKE ?
+                )
+            """
+            pattern = f"%{search.lower()}%"
+            parameters = (pattern, pattern)
+        rows = self.conn.execute(
+            f"""
+            SELECT telegram_chat_id, title, kind, is_active
+            FROM chats
+            WHERE kind IN ('group', 'supergroup')
+            {search_clause}
+            ORDER BY is_active DESC, LOWER(COALESCE(title, '')), telegram_chat_id
+            """,
+            parameters,
+        ).fetchall()
+        return [
+            DbChat(
+                telegram_chat_id=int(row["telegram_chat_id"]),
+                title=row["title"],
+                kind=row["kind"],
+                is_active=bool(row["is_active"]),
+            )
+            for row in rows
+        ]
+
     async def create_game(self, game: NewGame) -> DbGame:
         game_id = str(uuid.uuid4())
         now = now_text()

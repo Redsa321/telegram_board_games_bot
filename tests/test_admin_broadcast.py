@@ -4,7 +4,12 @@ from types import SimpleNamespace
 from telegram import User
 from telegram.constants import ChatType
 
-from telegram_board_games_bot.commands import admin_message_payload, handle_admin_message
+from telegram_board_games_bot.commands import (
+    admin_message_payload,
+    admin_message_target,
+    handle_admin_message,
+    telegram_text_chunks,
+)
 from telegram_board_games_bot.config import Config
 from telegram_board_games_bot.db import Database, UpsertChat
 
@@ -29,6 +34,9 @@ class FakeBot:
 def test_admin_message_payload_preserves_multiline_text() -> None:
     assert admin_message_payload("/admin_message First line\nSecond line") == "First line\nSecond line"
     assert admin_message_payload("/admin_message") == ""
+    assert admin_message_target("-100123 Hello group") == (-100123, "Hello group")
+    assert admin_message_target("Hello every group") == (None, "Hello every group")
+    assert telegram_text_chunks(["12345", "67890"], limit=8) == ["12345", "67890"]
 
 
 def test_active_group_registry_excludes_private_and_removed_chats(tmp_path) -> None:
@@ -43,6 +51,8 @@ def test_active_group_registry_excludes_private_and_removed_chats(tmp_path) -> N
         groups = await database.get_active_group_chats()
 
         assert [group.telegram_chat_id for group in groups] == [-10]
+        assert [group.telegram_chat_id for group in await database.search_group_chats("super")] == [-20]
+        assert [group.telegram_chat_id for group in await database.search_group_chats("-10")] == [-10]
         database.close()
 
     asyncio.run(scenario())
@@ -74,6 +84,36 @@ def test_admin_broadcast_sends_to_every_known_active_group(tmp_path) -> None:
         assert [sent["chat_id"] for sent in bot.sent] == [-20, -10]
         assert all(sent["text"] == "Maintenance in ten minutes" for sent in bot.sent)
         assert message.replies == ["Broadcast complete. Sent: 2. Failed: 0. Known active groups: 2."]
+        database.close()
+
+    asyncio.run(scenario())
+
+
+def test_admin_message_can_target_one_chat_id(tmp_path) -> None:
+    async def scenario() -> None:
+        database = Database.connect(str(tmp_path / "bot.db"))
+        await database.run_migrations()
+        await database.upsert_chat(UpsertChat(-10, "one", ChatType.GROUP))
+        await database.upsert_chat(UpsertChat(-20, "two", ChatType.SUPERGROUP))
+        bot = FakeBot()
+        message = FakeMessage("/admin_message -10 Only this group")
+        context = SimpleNamespace(
+            bot=bot,
+            application=SimpleNamespace(bot_data={
+                "database": database,
+                "config": Config("token", admin_user_id=783115680),
+            }),
+        )
+        update = SimpleNamespace(
+            effective_message=message,
+            effective_user=User(783115680, "Admin", False, username="onopriienkoos"),
+            effective_chat=SimpleNamespace(type=ChatType.PRIVATE),
+        )
+
+        await handle_admin_message(update, context)
+
+        assert bot.sent == [{"chat_id": -10, "text": "Only this group"}]
+        assert message.replies == ["Message sent to -10."]
         database.close()
 
     asyncio.run(scenario())

@@ -165,21 +165,58 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not text:
         await msg.reply_text("Usage: /admin_message your message")
         return
-    broadcast_text = text
-    if len(broadcast_text) > 4096:
+    target_chat_id, message_text = admin_message_target(text)
+    if not message_text:
+        await msg.reply_text("Usage: /admin_message [chat_id] your message")
+        return
+    if len(message_text) > 4096:
         await msg.reply_text("The broadcast is too long. Telegram messages can contain at most 4096 characters.")
         return
     database = get_database(context)
+    if target_chat_id is not None:
+        sent = await send_message_with_retry(context.bot, chat_id=target_chat_id, text=message_text)
+        await msg.reply_text(
+            f"Message sent to {target_chat_id}." if sent else f"Failed to send the message to {target_chat_id}."
+        )
+        return
     groups = await database.get_active_group_chats()
     sent = 0
     failed = 0
     for group in groups:
-        if await send_message_with_retry(context.bot, chat_id=group.telegram_chat_id, text=broadcast_text):
+        if await send_message_with_retry(context.bot, chat_id=group.telegram_chat_id, text=message_text):
             sent += 1
         else:
             failed += 1
         await asyncio.sleep(0.05)
     await msg.reply_text(f"Broadcast complete. Sent: {sent}. Failed: {failed}. Known active groups: {len(groups)}.")
+
+
+async def handle_admin_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    if msg is None or user is None or chat is None:
+        return
+    config = get_config(context)
+    if config.admin_user_id is None or telegram_user_id(user) != config.admin_user_id:
+        await msg.reply_text("This command is available only to the bot administrator.")
+        return
+    if chat.type != ChatType.PRIVATE:
+        await msg.reply_text("Search groups in your private chat with the bot.")
+        return
+    search = admin_message_payload(msg.text)
+    groups = await get_database(context).search_group_chats(search or None)
+    if not groups:
+        await msg.reply_text(f'No groups found for "{search}".' if search else "No groups are known yet.")
+        return
+    heading = f'Groups matching "{search}" ({len(groups)}):' if search else f"Known groups ({len(groups)}):"
+    lines = [heading]
+    for group in groups:
+        title = (group.title or "Untitled group").replace("\n", " ")[:120]
+        status = "active" if group.is_active else "inactive"
+        lines.append(f"{title} | {group.telegram_chat_id} | {status}")
+    for chunk in telegram_text_chunks(lines):
+        await msg.reply_text(chunk)
 
 
 async def handle_bot_membership_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -202,6 +239,30 @@ def admin_message_payload(message_text: str | None) -> str:
         return ""
     parts = message_text.split(maxsplit=1)
     return parts[1].strip() if len(parts) == 2 else ""
+
+
+def admin_message_target(payload: str) -> tuple[int | None, str]:
+    parts = payload.split(maxsplit=1)
+    try:
+        target_chat_id = int(parts[0])
+    except (IndexError, ValueError):
+        return None, payload
+    return target_chat_id, parts[1].strip() if len(parts) == 2 else ""
+
+
+def telegram_text_chunks(lines: list[str], limit: int = 4096) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if current and len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def handle_play_draughts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
