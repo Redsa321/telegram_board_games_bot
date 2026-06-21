@@ -165,7 +165,7 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if not text:
         await msg.reply_text("Usage: /admin_message your message")
         return
-    broadcast_text = f"Message from the bot administrator:\n\n{text}"
+    broadcast_text = text
     if len(broadcast_text) > 4096:
         await msg.reply_text("The broadcast is too long. Telegram messages can contain at most 4096 characters.")
         return

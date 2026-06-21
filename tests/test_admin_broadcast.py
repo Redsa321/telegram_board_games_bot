@@ -72,7 +72,7 @@ def test_admin_broadcast_sends_to_every_known_active_group(tmp_path) -> None:
         await handle_admin_message(update, context)
 
         assert [sent["chat_id"] for sent in bot.sent] == [-20, -10]
-        assert all("Maintenance in ten minutes" in sent["text"] for sent in bot.sent)
+        assert all(sent["text"] == "Maintenance in ten minutes" for sent in bot.sent)
         assert message.replies == ["Broadcast complete. Sent: 2. Failed: 0. Known active groups: 2."]
         database.close()
 
