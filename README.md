@@ -10,7 +10,8 @@ Public beta Telegram bot for draughts, chess, robot games, and global matchmakin
 - Easy, Normal, and Hard robot opponents
 - Per-move global timers with pre-game timeout agreement
 - Local/global and draughts/chess stats and leaderboards
-- Persistent SQLite queues, games, wallets, ratings, and move history
+- Shared PostgreSQL identities and wallets, with isolated board-game and siski schemas
+- Persistent queues, games, ratings, wallet ledger, and move history
 - English, Ukrainian, Russian, and Polish local UI; global games use English
 
 ## Local Setup
@@ -44,14 +45,13 @@ Stop an already running bot with `Ctrl+C` before using the update script.
 
 Only one bot process can use a database at a time. A second process exits before polling begins.
 
-For update-safe local storage, put the SQLite file outside the Git checkout and require it to exist:
+Production uses one PostgreSQL database shared with `telegram_kyzma_siski_bot`:
 
 ```dotenv
-DATABASE_URL=sqlite:////absolute/path/to/telegram-board-games-bot/bot.db
-DATABASE_REQUIRE_EXISTING=true
+DATABASE_URL=postgresql://kyzma:PASSWORD@127.0.0.1:5432/kyzma
 ```
 
-With the guard enabled, a wrong or missing path stops startup instead of creating an empty database. `make backup` automatically uses the database configured in `.env`.
+The schemas and wallet ownership model are documented in [docs/shared-postgresql.md](docs/shared-postgresql.md), including the one-time SQLite importer. SQLite remains supported as a migration source and for focused tests, but should not be used by two running bots.
 
 Before opening the beta to testers, rotate the BotFather token, place the new token only in `.env`, and keep that file readable only by the service account.
 
@@ -61,7 +61,7 @@ Install host packages and create a dedicated service account:
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv
+sudo apt install -y git python3 python3-venv postgresql postgresql-client
 sudo useradd --system --home-dir /opt/telegram-board-games-bot --create-home --shell /usr/sbin/nologin telegrambot
 sudo git clone <repository-url> /opt/telegram-board-games-bot
 sudo chown -R telegrambot:telegrambot /opt/telegram-board-games-bot
@@ -88,10 +88,10 @@ systemctl status telegram-board-games-bot
 journalctl -u telegram-board-games-bot -f
 journalctl -u telegram-board-games-bot-admin -f
 sudo systemctl start telegram-board-games-bot-backup.service
-sudo -u telegrambot /opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup restore --backup /opt/telegram-board-games-bot/backups/<backup>.db --database /opt/telegram-board-games-bot/bot.db
+sudo -u telegrambot /opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup restore --backup /opt/telegram-board-games-bot/backups/<backup>.dump
 ```
 
-Stop the bot before restoring a backup, then start it again. Backups are made online through SQLite's backup API and the seven newest files are retained.
+Stop both bots before restoring a backup, then start them again. PostgreSQL backups contain the shared data and both bots' schemas at one consistent point in time; the seven newest files are retained.
 
 ## Admin Dashboard
 

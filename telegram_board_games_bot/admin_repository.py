@@ -16,8 +16,10 @@ class AdminRepository:
             """
             SELECT
                 (SELECT COUNT(*) FROM users WHERE telegram_user_id > 0) AS users,
-                (SELECT COUNT(*) FROM chats WHERE kind IN ('group', 'supergroup')) AS groups,
-                (SELECT COUNT(*) FROM chats WHERE kind IN ('group', 'supergroup') AND is_active = 1) AS active_groups,
+                (SELECT COUNT(*) FROM chat_registry r JOIN chats c ON c.telegram_chat_id = r.chat_id
+                    WHERE c.kind IN ('group', 'supergroup')) AS groups,
+                (SELECT COUNT(*) FROM chat_registry r JOIN chats c ON c.telegram_chat_id = r.chat_id
+                    WHERE c.kind IN ('group', 'supergroup') AND r.is_active = 1) AS active_groups,
                 (SELECT COUNT(*) FROM games) AS games,
                 (SELECT COUNT(*) FROM games WHERE finished_at IS NULL AND status != 'finished') AS active_games,
                 (SELECT COALESCE(SUM(kyzma_coin_balance), 0) FROM global_wallets) AS coin_supply
@@ -43,7 +45,7 @@ class AdminRepository:
                 c.telegram_chat_id AS chat_id,
                 c.title,
                 c.kind,
-                c.is_active,
+                r.is_active,
                 c.updated_at,
                 (SELECT COUNT(*) FROM games g WHERE g.chat_id = c.telegram_chat_id) AS games_count,
                 (SELECT COUNT(DISTINCT s.user_id) FROM chat_user_stats s WHERE s.chat_id = c.telegram_chat_id) AS players_count,
@@ -52,9 +54,10 @@ class AdminRepository:
                     c.updated_at
                 ) AS last_activity
             FROM chats c
+            JOIN chat_registry r ON r.chat_id = c.telegram_chat_id
             WHERE c.kind IN ('group', 'supergroup')
             {search_clause}
-            ORDER BY c.is_active DESC, LOWER(COALESCE(c.title, '')), c.telegram_chat_id
+            ORDER BY r.is_active DESC, LOWER(COALESCE(c.title, '')), c.telegram_chat_id
             """,
             parameters,
         ).fetchall()

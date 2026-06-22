@@ -127,11 +127,13 @@ async def handle_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     database = get_database(context)
     counts = await database.get_admin_status_counts()
-    database_size = sum(
-        path.stat().st_size
-        for path in (database.path, database.path.with_name(f"{database.path.name}-wal"))
-        if path.exists()
-    )
+    database_size = None
+    if database.path is not None:
+        database_size = sum(
+            path.stat().st_size
+            for path in (database.path, database.path.with_name(f"{database.path.name}-wal"))
+            if path.exists()
+        )
     bot_data = context.application.bot_data
     await msg.reply_text(
         "\n".join([
@@ -141,7 +143,7 @@ async def handle_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Confirming games: {counts['confirming_games']}",
             f"Active games: {counts['active_games']}",
             f"Active global games: {counts['global_games']}",
-            f"Database size: {format_file_size(database_size)}",
+            f"Database: {format_file_size(database_size) if database_size is not None else 'PostgreSQL'}",
             f"Errors since start: {bot_data.get('error_count', 0)}",
             f"Last error: {bot_data.get('last_error', 'none')}",
         ])

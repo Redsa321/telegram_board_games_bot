@@ -221,23 +221,58 @@ class _InsufficientKyzmaBalance(Exception):
 
 
 class Database:
-    def __init__(self, path: Path):
+    POSTGRES_BOT_LOCK_ID = 5429459587919437652
+
+    def __init__(self, path: Path | None, database_url: str | None = None):
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(path)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=5000")
-        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.database_url = database_url or f"sqlite:///{path}"
+        self.backend = "postgresql" if is_postgres_url(self.database_url) else "sqlite"
+        if self.backend == "postgresql":
+            from .postgres import PostgresConnection
+
+            self.conn = PostgresConnection(self.database_url)
+        else:
+            if self.path is None:
+                raise ValueError("SQLite requires a database path")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(self.path)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA busy_timeout=5000")
+            self.conn.execute("PRAGMA foreign_keys=ON")
 
     @classmethod
     def connect(cls, database_url: str) -> "Database":
-        return cls(database_path(database_url))
+        return cls(None if is_postgres_url(database_url) else database_path(database_url), database_url)
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.backend == "sqlite"
+
+    @property
+    def storage_label(self) -> str:
+        return str(self.path.resolve()) if self.path is not None else "PostgreSQL"
+
+    def acquire_bot_runtime_lock(self) -> None:
+        if self.backend != "postgresql":
+            return
+        if not self.conn.acquire_advisory_lock(self.POSTGRES_BOT_LOCK_ID):
+            raise RuntimeError("another board bot process already holds the PostgreSQL runtime lock")
+
+    def release_bot_runtime_lock(self) -> None:
+        if self.backend == "postgresql":
+            self.conn.release_advisory_lock(self.POSTGRES_BOT_LOCK_ID)
 
     async def run_migrations(self) -> None:
         self._run_migrations()
 
     def _run_migrations(self) -> None:
+        if self.backend == "postgresql":
+            from .postgres_schema import POSTGRES_SCHEMA_SQL
+
+            self.conn.executescript(POSTGRES_SCHEMA_SQL)
+            self._ensure_global_chat()
+            return
         self._maybe_migrate_early_games_table()
         self.conn.executescript(SCHEMA_SQL)
         self._add_column_if_missing("users", "language_code", "TEXT")
@@ -247,6 +282,8 @@ class Database:
         self._add_column_if_missing("chat_user_stats", "starter_kyzma_granted", "INTEGER NOT NULL DEFAULT 0")
         self._grant_starter_kyzma_to_legacy_empty_stats()
         self._maybe_migrate_kyzma_coin_events_table()
+        self._ensure_global_chat()
+        self._migrate_sqlite_chat_registry()
         self._migrate_global_wallets()
         self.conn.executescript(INDEX_SQL)
         self.conn.commit()
@@ -327,6 +364,26 @@ class Database:
             (STARTER_KYZMA_COINS,),
         )
 
+    def _ensure_global_chat(self) -> None:
+        now = now_text()
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO chats (
+                telegram_chat_id, title, kind, is_active, created_at, updated_at
+            ) VALUES (0, 'Global economy', 'global', 1, ?, ?)
+            """,
+            (now, now),
+        )
+        self.conn.commit()
+
+    def _migrate_sqlite_chat_registry(self) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO chat_registry (chat_id, is_active, created_at, updated_at)
+            SELECT telegram_chat_id, is_active, created_at, updated_at FROM chats
+            """
+        )
+
     def _insert_user_stats_ignore(self, chat_id: int, user_id: int, game_kind: str) -> bool:
         cursor = self.conn.execute(
             """
@@ -340,6 +397,40 @@ class Database:
         return cursor.rowcount == 1
 
     def _insert_global_wallet_ignore(self, user_id: int) -> bool:
+        now = now_text()
+        starter_balance = self._starter_kyzma_balance()
+        if self.backend == "postgresql":
+            row = self.conn.execute(
+                """
+                WITH inserted AS (
+                    INSERT INTO global_wallets (
+                        user_id, kyzma_coin_balance, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO NOTHING
+                    RETURNING user_id
+                ), ledger AS (
+                    INSERT INTO kyzma_coin_events (
+                        game_id, chat_id, user_id, game_kind, amount, multiplier,
+                        reason, source_bot, created_at
+                    )
+                    SELECT ?, 0, user_id, 'economy', ?, NULL,
+                           'starter_balance', 'board_games', ?
+                    FROM inserted
+                    ON CONFLICT(game_id, user_id, reason) DO NOTHING
+                )
+                SELECT EXISTS(SELECT 1 FROM inserted) AS inserted
+                """,
+                (
+                    user_id,
+                    starter_balance,
+                    now,
+                    now,
+                    f"starter:{user_id}",
+                    starter_balance,
+                    now,
+                ),
+            ).fetchone()
+            return bool(row and row["inserted"])
         cursor = self.conn.execute(
             """
             INSERT OR IGNORE INTO global_wallets (
@@ -347,9 +438,27 @@ class Database:
             )
             VALUES (?, ?, ?, ?)
             """,
-            (user_id, STARTER_KYZMA_COINS, now_text(), now_text()),
+            (user_id, starter_balance, now, now),
         )
-        return cursor.rowcount == 1
+        inserted = cursor.rowcount == 1
+        if inserted:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO kyzma_coin_events (
+                    game_id, chat_id, user_id, game_kind, amount, multiplier, reason, created_at
+                ) VALUES (?, 0, ?, 'economy', ?, NULL, 'starter_balance', ?)
+                """,
+                (f"starter:{user_id}", user_id, starter_balance, now),
+            )
+        return inserted
+
+    def _starter_kyzma_balance(self) -> int:
+        if self.backend != "postgresql":
+            return STARTER_KYZMA_COINS
+        row = self.conn.execute(
+            "SELECT integer_value FROM shared.economy_settings WHERE key = 'starter_balance'"
+        ).fetchone()
+        return int(row["integer_value"]) if row is not None else STARTER_KYZMA_COINS
 
     def _insert_global_stats_ignore(self, user_id: int, game_kind: str) -> bool:
         cursor = self.conn.execute(
@@ -396,11 +505,21 @@ class Database:
             """,
             (chat.telegram_chat_id, chat.title, chat.kind, now, now),
         )
+        self.conn.execute(
+            """
+            INSERT INTO chat_registry (chat_id, is_active, created_at, updated_at)
+            VALUES (?, 1, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                is_active = 1,
+                updated_at = excluded.updated_at
+            """,
+            (chat.telegram_chat_id, now, now),
+        )
         self.conn.commit()
 
     async def set_chat_active(self, chat_id: int, active: bool) -> None:
         self.conn.execute(
-            "UPDATE chats SET is_active = ?, updated_at = ? WHERE telegram_chat_id = ?",
+            "UPDATE chat_registry SET is_active = ?, updated_at = ? WHERE chat_id = ?",
             (int(active), now_text(), chat_id),
         )
         self.conn.commit()
@@ -408,10 +527,11 @@ class Database:
     async def get_active_group_chats(self) -> list[DbChat]:
         rows = self.conn.execute(
             """
-            SELECT telegram_chat_id, title, kind, is_active
-            FROM chats
-            WHERE kind IN ('group', 'supergroup') AND is_active = 1
-            ORDER BY telegram_chat_id
+            SELECT c.telegram_chat_id, c.title, c.kind, r.is_active
+            FROM chats c
+            JOIN chat_registry r ON r.chat_id = c.telegram_chat_id
+            WHERE c.kind IN ('group', 'supergroup') AND r.is_active = 1
+            ORDER BY c.telegram_chat_id
             """
         ).fetchall()
         return [
@@ -443,11 +563,15 @@ class Database:
             """
             INSERT INTO audit_events (event_type, chat_id, user_id, details_json, created_at)
             VALUES (?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (event_type, chat_id, user_id, json.dumps(details or {}, separators=(",", ":")), now_text()),
         )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("audit event insert did not return an ID")
         self.conn.commit()
-        return int(cursor.lastrowid)
+        return int(row["id"])
 
     async def search_group_chats(self, search: str | None = None) -> list[DbChat]:
         parameters: tuple[str, ...] = ()
@@ -463,11 +587,12 @@ class Database:
             parameters = (pattern, pattern)
         rows = self.conn.execute(
             f"""
-            SELECT telegram_chat_id, title, kind, is_active
-            FROM chats
-            WHERE kind IN ('group', 'supergroup')
+            SELECT c.telegram_chat_id, c.title, c.kind, r.is_active
+            FROM chats c
+            JOIN chat_registry r ON r.chat_id = c.telegram_chat_id
+            WHERE c.kind IN ('group', 'supergroup')
             {search_clause}
-            ORDER BY is_active DESC, LOWER(COALESCE(title, '')), telegram_chat_id
+            ORDER BY r.is_active DESC, LOWER(COALESCE(c.title, '')), c.telegram_chat_id
             """,
             parameters,
         ).fetchall()
@@ -567,13 +692,18 @@ class Database:
             """
             INSERT INTO moves (game_id, move_number, user_id, move_text, state_after_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
+            RETURNING id
             """,
             (move.game_id, move.move_number, move.user_id, move.move_text, dump_state(move.state_after), now),
         )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("move insert did not return an ID")
         self.conn.commit()
-        db_move = await self.get_move(cursor.lastrowid)
+        move_id = int(row["id"])
+        db_move = await self.get_move(move_id)
         if db_move is None:
-            raise RuntimeError(f"created move {cursor.lastrowid} was not found")
+            raise RuntimeError(f"created move {move_id} was not found")
         return db_move
 
     async def get_move(self, move_id: int) -> DbMove | None:
@@ -716,9 +846,9 @@ class Database:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id, user_a_id, user_b_id, game_kind) DO UPDATE SET
-                    user_a_wins = user_a_wins + excluded.user_a_wins,
-                    user_b_wins = user_b_wins + excluded.user_b_wins,
-                    draws = draws + excluded.draws
+                    user_a_wins = head_to_head_stats.user_a_wins + excluded.user_a_wins,
+                    user_b_wins = head_to_head_stats.user_b_wins + excluded.user_b_wins,
+                    draws = head_to_head_stats.draws + excluded.draws
                 """,
                 (outcome.chat_id, head_user_a, head_user_b, outcome.game_kind, int(user_a_won), int(user_b_won), int(draw)),
             )
@@ -914,8 +1044,11 @@ class Database:
     async def create_game_view(self, view: GameView) -> None:
         self.conn.execute(
             """
-            INSERT OR REPLACE INTO game_views (game_id, user_id, chat_id, message_id)
+            INSERT INTO game_views (game_id, user_id, chat_id, message_id)
             VALUES (?, ?, ?, ?)
+            ON CONFLICT(game_id, user_id) DO UPDATE SET
+                chat_id = excluded.chat_id,
+                message_id = excluded.message_id
             """,
             (view.game_id, view.user_id, view.chat_id, view.message_id),
         )
@@ -1158,6 +1291,8 @@ class Database:
 
 
 def database_path(database_url: str) -> Path:
+    if is_postgres_url(database_url):
+        raise ValueError("PostgreSQL URLs do not have a local database path")
     if database_url.startswith("sqlite:///"):
         path = database_url.removeprefix("sqlite:///")
         return Path(path or "bot.db").expanduser()
@@ -1167,6 +1302,10 @@ def database_path(database_url: str) -> Path:
             return Path(f"/{parsed.netloc}{parsed.path}").expanduser()
         return Path(parsed.netloc or parsed.path.lstrip("/") or "bot.db").expanduser()
     return Path(database_url).expanduser()
+
+
+def is_postgres_url(database_url: str) -> bool:
+    return database_url.startswith(("postgresql://", "postgres://", "postgresql+psycopg://"))
 
 
 def dump_state(state: Any) -> str:
@@ -1240,6 +1379,14 @@ CREATE TABLE IF NOT EXISTS chats (
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_registry (
+    chat_id INTEGER PRIMARY KEY,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(chat_id) REFERENCES chats(telegram_chat_id)
 );
 
 CREATE TABLE IF NOT EXISTS games (

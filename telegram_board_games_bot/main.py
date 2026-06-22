@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from telegram import BotCommand, Update
@@ -38,7 +39,7 @@ from .commands import (
     handle_wallet,
 )
 from .config import Config
-from .db import Database, database_path
+from .db import Database, database_path, is_postgres_url
 from .global_matchmaking import (
     handle_cancel_global,
     handle_global_timeout_callback,
@@ -184,19 +185,26 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
     config = Config.from_env()
-    configured_database_path = database_path(config.database_url)
-    if config.require_existing_database and not configured_database_path.is_file():
+    configured_database_path = None if is_postgres_url(config.database_url) else database_path(config.database_url)
+    if config.require_existing_database and configured_database_path is not None and not configured_database_path.is_file():
         raise RuntimeError(
             f"configured database does not exist: {configured_database_path}. "
             "Refusing to create an empty replacement database."
         )
     database = Database.connect(config.database_url)
-    process_lock = ProcessLock(database.path.with_name(f"{database.path.name}.lock"))
+    lock_path = (
+        database.path.with_name(f"{database.path.name}.lock")
+        if database.path is not None
+        else Path(".telegram-board-games-bot.lock")
+    )
+    process_lock = ProcessLock(lock_path)
     try:
         process_lock.acquire()
+        database.acquire_bot_runtime_lock()
         database._run_migrations()
-        logger.info("using persistent database: %s", database.path.resolve())
+        logger.info("using persistent database: %s", database.storage_label)
         build_application(config, database).run_polling(allowed_updates=Update.ALL_TYPES)
     finally:
+        database.release_bot_runtime_lock()
         database.close()
         process_lock.release()

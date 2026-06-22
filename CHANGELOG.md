@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Added PostgreSQL production persistence with isolated `shared`, `board_games`, and `siski` schemas
+- Replaced cross-process SQLite wallet writes with an atomic shared wallet and coin ledger
+- Added verified SQLite importers and PostgreSQL `pg_dump`/`pg_restore` operations
+- Separated shared chat metadata from per-bot group membership for safe broadcasts
+
 ## 0.1.0-beta.1 - 2026-06-20
 
 First public beta.

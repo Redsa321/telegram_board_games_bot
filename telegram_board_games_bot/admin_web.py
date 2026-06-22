@@ -15,7 +15,7 @@ from telegram import Bot
 
 from .admin_repository import AdminRepository
 from .config import Config
-from .db import Database, database_path
+from .db import Database, database_path, is_postgres_url
 from .telegram_retry import send_message_with_retry
 
 WEB_DIRECTORY = Path(__file__).with_name("admin_web_static")
@@ -174,8 +174,8 @@ def no_store_file(path: Path, media_type: str) -> FileResponse:
 def main() -> None:
     load_dotenv()
     config = Config.from_env()
-    configured_database_path = database_path(config.database_url)
-    if config.require_existing_database and not configured_database_path.is_file():
+    configured_database_path = None if is_postgres_url(config.database_url) else database_path(config.database_url)
+    if config.require_existing_database and configured_database_path is not None and not configured_database_path.is_file():
         raise RuntimeError(f"configured database does not exist: {configured_database_path}")
     uvicorn.run(
         create_admin_app(config),

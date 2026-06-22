@@ -7,7 +7,7 @@ INSTALL_STAMP := $(VENV)/.bot-installed
 
 .DEFAULT_GOAL := run
 
-.PHONY: run admin setup test lint backup help check-env
+.PHONY: run admin setup test lint backup migrate-postgres help check-env
 
 run: setup check-env
 	$(PYTHON) -m telegram_board_games_bot
@@ -39,6 +39,10 @@ lint: setup
 backup: setup
 	$(PYTHON) -m telegram_board_games_bot.backup backup --output backups --keep 7
 
+migrate-postgres: setup check-env
+	@test -n "$(SOURCE)" || { echo "Usage: make migrate-postgres SOURCE=/absolute/path/to/bot.db"; exit 1; }
+	$(PYTHON) -m telegram_board_games_bot.migrate_to_postgres --source "$(SOURCE)" --confirm
+
 help:
 	@echo "make        Start the bot (default)"
 	@echo "make run    Start the bot"
@@ -46,4 +50,5 @@ help:
 	@echo "make setup  Create the venv and install dependencies"
 	@echo "make test   Run the test suite"
 	@echo "make lint   Run Ruff"
-	@echo "make backup Create a checked SQLite backup"
+	@echo "make backup Create a checked database backup"
+	@echo "make migrate-postgres SOURCE=/path/to/bot.db  Import SQLite into configured PostgreSQL"

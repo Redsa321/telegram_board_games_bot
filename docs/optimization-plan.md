@@ -5,7 +5,7 @@
 - Persist piece selection without editing the Telegram message
 - Render only after a completed move
 - Respect Telegram `RetryAfter` flood-control responses
-- Keep SQLite on a durable path outside the repository
+- Keep PostgreSQL on durable storage with checked whole-database backups
 
 ## Stage 1: Measure
 
@@ -17,7 +17,7 @@ Coalesce obsolete board edits, prevent duplicate edits for unchanged state, and 
 
 ## Stage 3: Local Work
 
-Profile robot calculations and combine related SQLite writes into transactions. Cache only immutable or safely invalidated values such as player display metadata.
+Profile robot calculations and database round trips. Keep related PostgreSQL writes in one transaction and cache only immutable or safely invalidated values such as player display metadata.
 
 ## Stage 4: Hosting Transport
 
