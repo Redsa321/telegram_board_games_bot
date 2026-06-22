@@ -7,7 +7,7 @@ from html import escape
 
 from telegram import Chat, Message, ReplyParameters, Update, User
 from telegram.constants import ChatMemberStatus, ChatType, ParseMode
-from telegram.error import NetworkError, TimedOut
+from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import ContextTypes
 
 from . import __version__, i18n
@@ -173,8 +173,23 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text("The broadcast is too long. Telegram messages can contain at most 4096 characters.")
         return
     database = get_database(context)
+    await database.upsert_user(upsert_user_from_telegram(user))
     if target_chat_id is not None:
         sent = await send_message_with_retry(context.bot, chat_id=target_chat_id, text=message_text)
+        if sent:
+            audit_chat_id: int | None = target_chat_id
+            if not await database.chat_exists(target_chat_id):
+                try:
+                    target_chat = await context.bot.get_chat(target_chat_id)
+                    await database.upsert_chat(upsert_chat_from_telegram(target_chat))
+                except TelegramError:
+                    audit_chat_id = None
+            await database.record_audit_event(
+                "admin_message",
+                chat_id=audit_chat_id,
+                user_id=telegram_user_id(user),
+                details={"text": message_text, "source": "telegram", "target_chat_id": target_chat_id},
+            )
         await msg.reply_text(
             f"Message sent to {target_chat_id}." if sent else f"Failed to send the message to {target_chat_id}."
         )
@@ -185,6 +200,12 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     for group in groups:
         if await send_message_with_retry(context.bot, chat_id=group.telegram_chat_id, text=message_text):
             sent += 1
+            await database.record_audit_event(
+                "admin_message",
+                chat_id=group.telegram_chat_id,
+                user_id=telegram_user_id(user),
+                details={"text": message_text, "source": "telegram"},
+            )
         else:
             failed += 1
         await asyncio.sleep(0.05)
@@ -232,6 +253,11 @@ async def handle_bot_membership_update(update: Update, context: ContextTypes.DEF
         ChatMemberStatus.RESTRICTED,
     }
     await database.set_chat_active(chat.id, active)
+    await database.record_audit_event(
+        "group_membership",
+        chat_id=chat.id,
+        details={"active": active, "title": chat.title},
+    )
 
 
 def admin_message_payload(message_text: str | None) -> str:

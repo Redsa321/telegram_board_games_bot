@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram Board Games Bot admin dashboard
+After=network-online.target telegram-board-games-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telegrambot
+Group=telegrambot
+WorkingDirectory=/opt/telegram-board-games-bot
+EnvironmentFile=/opt/telegram-board-games-bot/.env
+ExecStart=/opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.admin_web
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

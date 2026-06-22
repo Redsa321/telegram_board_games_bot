@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kyzma Admin</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div id="login-view" class="login-view">
+    <form id="login-form" class="login-panel">
+      <div class="brand-mark">K</div>
+      <div>
+        <h1>Kyzma Admin</h1>
+        <p>Enter the server access token.</p>
+      </div>
+      <label for="token-input">Admin token</label>
+      <input id="token-input" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="form-error" hidden></p>
+      <button type="submit" class="button primary">Sign in</button>
+    </form>
+  </div>
+
+  <div id="app" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark small">K</div>
+        <div><strong>Kyzma Admin</strong><span>Board games operations</span></div>
+      </div>
+      <div class="topbar-actions">
+        <span id="connection-status" class="status-dot">Connected</span>
+        <button id="refresh-button" class="button quiet" type="button">Refresh</button>
+        <button id="logout-button" class="button quiet" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <section id="overview" class="overview-band" aria-label="Overview"></section>
+
+    <nav class="tabs" aria-label="Admin sections">
+      <button class="tab active" data-tab="groups" type="button">Groups</button>
+      <button class="tab" data-tab="users" type="button">Users</button>
+      <button class="tab" data-tab="activity" type="button">Activity</button>
+    </nav>
+
+    <main>
+      <section id="groups-tab" class="tab-panel active">
+        <div class="split-view groups-view">
+          <aside class="list-pane">
+            <div class="pane-toolbar">
+              <div>
+                <h2>Groups</h2>
+                <span id="group-count" class="muted"></span>
+              </div>
+              <button id="broadcast-button" class="button primary" type="button">Message all</button>
+            </div>
+            <label class="search-field">
+              <span class="sr-only">Search groups</span>
+              <input id="group-search" type="search" placeholder="Search name or chat ID">
+            </label>
+            <div id="group-list" class="entity-list"></div>
+          </aside>
+          <section class="detail-pane">
+            <div id="group-empty" class="empty-state">
+              <h2>Select a group</h2>
+              <p>Choose a group to inspect games, coin events, claims, and admin messages.</p>
+            </div>
+            <div id="group-detail" hidden>
+              <div class="detail-header">
+                <button id="group-back-button" class="mobile-back" type="button" aria-label="Back to groups" title="Back to groups">←</button>
+                <div>
+                  <div class="eyebrow">Group activity</div>
+                  <h2 id="group-title"></h2>
+                  <p id="group-meta" class="muted"></p>
+                </div>
+                <button id="group-message-button" class="button primary" type="button">Send message</button>
+              </div>
+              <div id="group-events" class="timeline"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="users-tab" class="tab-panel">
+        <div class="users-layout">
+          <section class="table-pane">
+            <div class="pane-toolbar">
+              <div><h2>Users</h2><span id="user-count" class="muted"></span></div>
+              <label class="search-field compact">
+                <span class="sr-only">Search users</span>
+                <input id="user-search" type="search" placeholder="Search ID, username, or name">
+              </label>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>Player</th><th>ID</th><th>Wallet</th><th>Draughts</th><th>Chess</th><th>Games</th></tr></thead>
+                <tbody id="users-table"></tbody>
+              </table>
+            </div>
+          </section>
+          <aside id="user-detail" class="user-detail" hidden></aside>
+        </div>
+      </section>
+
+      <section id="activity-tab" class="tab-panel">
+        <div class="activity-header">
+          <div><h2>All activity</h2><p class="muted">Finished games, wallet events, claims, and admin actions.</p></div>
+          <button id="activity-refresh" class="button quiet" type="button">Refresh</button>
+        </div>
+        <div id="activity-events" class="timeline wide"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="message-dialog">
+    <form id="message-form" method="dialog">
+      <div class="dialog-header">
+        <div><div class="eyebrow">Admin message</div><h2 id="message-recipient">Selected group</h2></div>
+        <button id="message-close" class="icon-button" type="button" aria-label="Close">×</button>
+      </div>
+      <label for="message-text">Message</label>
+      <textarea id="message-text" maxlength="4096" rows="7" required></textarea>
+      <div class="character-count"><span id="message-length">0</span>/4096</div>
+      <p id="message-error" class="form-error" hidden></p>
+      <div class="dialog-actions">
+        <button id="message-cancel" class="button quiet" type="button">Cancel</button>
+        <button id="message-submit" class="button primary" type="submit">Send</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

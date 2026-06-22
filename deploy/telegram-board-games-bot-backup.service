@@ -6,4 +6,5 @@ Type=oneshot
 User=telegrambot
 Group=telegrambot
 WorkingDirectory=/opt/telegram-board-games-bot
-ExecStart=/opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup backup --database bot.db --output backups --keep 7
+EnvironmentFile=/opt/telegram-board-games-bot/.env
+ExecStart=/opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup backup --output backups --keep 7

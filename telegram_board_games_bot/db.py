@@ -424,6 +424,31 @@ class Database:
             for row in rows
         ]
 
+    async def chat_exists(self, chat_id: int) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM chats WHERE telegram_chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        return row is not None
+
+    async def record_audit_event(
+        self,
+        event_type: str,
+        *,
+        chat_id: int | None = None,
+        user_id: int | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO audit_events (event_type, chat_id, user_id, details_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (event_type, chat_id, user_id, json.dumps(details or {}, separators=(",", ":")), now_text()),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
     async def search_group_chats(self, search: str | None = None) -> list[DbChat]:
         parameters: tuple[str, ...] = ()
         search_clause = ""
@@ -1346,6 +1371,17 @@ CREATE TABLE IF NOT EXISTS head_to_head_stats (
     FOREIGN KEY(user_b_id) REFERENCES users(telegram_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    chat_id INTEGER,
+    user_id INTEGER,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(chat_id) REFERENCES chats(telegram_chat_id),
+    FOREIGN KEY(user_id) REFERENCES users(telegram_user_id)
+);
+
 CREATE TABLE IF NOT EXISTS inline_invites (
     inline_message_id TEXT PRIMARY KEY,
     challenger_id INTEGER NOT NULL,
@@ -1364,6 +1400,8 @@ CREATE INDEX IF NOT EXISTS idx_global_user_stats_leaderboard ON global_user_stat
 CREATE INDEX IF NOT EXISTS idx_matchmaking_queue_pool ON matchmaking_queue(game_kind, rated, joined_at);
 CREATE INDEX IF NOT EXISTS idx_game_views_user ON game_views(user_id, game_id);
 CREATE INDEX IF NOT EXISTS idx_kyzma_coin_events_user ON kyzma_coin_events(chat_id, user_id, game_kind);
+CREATE INDEX IF NOT EXISTS idx_audit_events_chat_created ON audit_events(chat_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_events_user_created ON audit_events(user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_kyzma_coin_events_once
     ON kyzma_coin_events(game_id, user_id, reason);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_games_unique_active_invite

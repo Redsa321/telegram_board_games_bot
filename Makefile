@@ -7,10 +7,13 @@ INSTALL_STAMP := $(VENV)/.bot-installed
 
 .DEFAULT_GOAL := run
 
-.PHONY: run setup test lint backup help check-env
+.PHONY: run admin setup test lint backup help check-env
 
 run: setup check-env
 	$(PYTHON) -m telegram_board_games_bot
+
+admin: setup check-env
+	$(PYTHON) -m telegram_board_games_bot.admin_web
 
 setup: $(INSTALL_STAMP)
 
@@ -39,6 +42,7 @@ backup: setup
 help:
 	@echo "make        Start the bot (default)"
 	@echo "make run    Start the bot"
+	@echo "make admin  Start the admin web server"
 	@echo "make setup  Create the venv and install dependencies"
 	@echo "make test   Run the test suite"
 	@echo "make lint   Run Ruff"

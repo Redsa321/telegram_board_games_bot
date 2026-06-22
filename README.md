@@ -23,9 +23,11 @@ make setup
 ```
 
 Set `BOT_TOKEN` in `.env`. Set `ADMIN_USER_ID` to your Telegram numeric user ID and optionally set `FEEDBACK_CHAT_ID`; feedback goes to the admin ID when the latter is empty.
+Generate a separate dashboard password with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` and store it as `ADMIN_WEB_TOKEN`.
 
 ```bash
 make           # run the bot
+make admin     # run the admin dashboard on 127.0.0.1:8080
 make test      # run tests
 make lint      # run Ruff
 make backup    # write a checked backup under backups/
@@ -75,6 +77,7 @@ sudo cp /opt/telegram-board-games-bot/deploy/*.service /etc/systemd/system/
 sudo cp /opt/telegram-board-games-bot/deploy/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now telegram-board-games-bot.service
+sudo systemctl enable --now telegram-board-games-bot-admin.service
 sudo systemctl enable --now telegram-board-games-bot-backup.timer
 ```
 
@@ -83,11 +86,24 @@ Operational commands:
 ```bash
 systemctl status telegram-board-games-bot
 journalctl -u telegram-board-games-bot -f
+journalctl -u telegram-board-games-bot-admin -f
 sudo systemctl start telegram-board-games-bot-backup.service
 sudo -u telegrambot /opt/telegram-board-games-bot/.venv/bin/python -m telegram_board_games_bot.backup restore --backup /opt/telegram-board-games-bot/backups/<backup>.db --database /opt/telegram-board-games-bot/bot.db
 ```
 
 Stop the bot before restoring a backup, then start it again. Backups are made online through SQLite's backup API and the seven newest files are retained.
+
+## Admin Dashboard
+
+The dashboard lists known groups, player profiles, global and per-group stats, finished games, wallet activity, daily claims, and admin messages. It can send a plain message to one group or every active group. Historical game and wallet records appear immediately; admin and membership audit events are collected from the update that introduces this dashboard onward.
+
+Keep `ADMIN_WEB_HOST=127.0.0.1` on the host. Open a private tunnel from your own computer:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 HOST_USER@HOST_IP
+```
+
+Then visit `http://127.0.0.1:8080` and enter `ADMIN_WEB_TOKEN`. Do not bind the dashboard directly to a public interface without an HTTPS reverse proxy and network access controls.
 
 ## Beta Operations
 
