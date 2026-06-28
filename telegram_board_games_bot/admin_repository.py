@@ -98,15 +98,22 @@ class AdminRepository:
                 u.language_code,
                 u.updated_at,
                 COALESCE(w.kyzma_coin_balance, 0) AS balance,
-                COALESCE(MAX(CASE WHEN gs.game_kind = 'draughts' THEN gs.rating END), 1000) AS draughts_rating,
-                COALESCE(MAX(CASE WHEN gs.game_kind = 'chess' THEN gs.rating END), 1000) AS chess_rating,
-                COALESCE(SUM(gs.games_played), 0) AS global_games
+                COALESCE(gs.draughts_rating, 1000) AS draughts_rating,
+                COALESCE(gs.chess_rating, 1000) AS chess_rating,
+                COALESCE(gs.global_games, 0) AS global_games
             FROM users u
             LEFT JOIN global_wallets w ON w.user_id = u.telegram_user_id
-            LEFT JOIN global_user_stats gs ON gs.user_id = u.telegram_user_id
+            LEFT JOIN (
+                SELECT
+                    user_id,
+                    MAX(CASE WHEN game_kind = 'draughts' THEN rating END) AS draughts_rating,
+                    MAX(CASE WHEN game_kind = 'chess' THEN rating END) AS chess_rating,
+                    SUM(games_played) AS global_games
+                FROM global_user_stats
+                GROUP BY user_id
+            ) gs ON gs.user_id = u.telegram_user_id
             WHERE u.telegram_user_id > 0
             {search_clause}
-            GROUP BY u.telegram_user_id
             ORDER BY u.updated_at DESC, u.telegram_user_id
             LIMIT ?
             """,

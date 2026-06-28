@@ -21,7 +21,7 @@ sudo -u postgres createdb --owner=kyzma kyzma
 ```
 
 Use a strong URL-safe password. Keep PostgreSQL bound to localhost when both bots run on the same host.
-
+uk
 ## Safe Cutover
 
 Stop both bots and take copies of both SQLite databases before changing `.env`:
